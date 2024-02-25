@@ -18,7 +18,7 @@ build:
 	cargo build $(release)
 
 install:
-	install -Dm 0644 target/$(target)/$(prog) /usr/bin/$(prog)$(extension)
+	install -Dm 0755 target/$(target)/$(prog) /usr/bin/$(prog)$(extension)
 
 all: build install
 
