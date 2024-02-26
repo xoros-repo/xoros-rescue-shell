@@ -1,8 +1,15 @@
 use cursive::{event::Key, menu, traits::*, views::Dialog};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use cursive::theme::{Color, Palette, PaletteColor, Theme};
 
 fn main() {
     let mut siv = cursive::default();
+    let mut theme = Theme::default();
+    let mut palette = Palette::default();
+
+    palette[PaletteColor::Background] = Color::Rgb(30, 30 ,30);
+    theme.palette = palette;
+    siv.set_theme(theme);
 
     // We'll use a counter to name new files.
     let counter = AtomicUsize::new(1);
