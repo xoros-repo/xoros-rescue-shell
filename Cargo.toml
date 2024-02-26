@@ -2,8 +2,10 @@
 name = "xoros-rescue-shell"
 version = "0.1.0"
 edition = "2021"
+homepage = "https://github.com/xoros-repo/xoros-rescue-shell"
+repository = "https://github.com/xoros-repo/xoros-rescue-shell.git"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-cursive = "0.20"
+cursive = { version = "0.20.0", default-features = false, features = ["pancurses-backend"]}
