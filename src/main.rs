@@ -137,5 +137,6 @@ fn main() {
 
     c.add_layer(Dialog::text("Press ESC to continue..."));
     c.status_bar(format!("Xoros Rescue Shell v{}", VERSION));
+    c.set_fps(30);
     c.run();
 }
