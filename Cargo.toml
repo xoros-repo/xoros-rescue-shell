@@ -11,4 +11,5 @@ repository = "https://github.com/xoros-repo/xoros-rescue-shell.git"
 crossterm = "0.27.0"
 cursive = { version = "0.20.0", default-features = false, features = ["crossterm-backend"]}
 cursive_buffered_backend = "0.6.1"
+sysinfo = "*"
 

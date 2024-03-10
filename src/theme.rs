@@ -4,8 +4,8 @@ pub(crate) fn theme() -> Theme {
     let mut theme = Theme::default();
     let mut palette = Palette::default();
 
-    palette[PaletteColor::Background] = Color::Dark(BaseColor::Red);
-    palette[PaletteColor::View] = Color::Light(BaseColor::Red);
+    palette[PaletteColor::Background] = Color::Light(BaseColor::Black);
+    palette[PaletteColor::View] = Color::Light(BaseColor::Yellow);
     palette[PaletteColor::Shadow] = Color::Dark(BaseColor::Black);
     palette[PaletteColor::Highlight] = Color::Dark(BaseColor::Black);
     palette[PaletteColor::HighlightText] = Color::Light(BaseColor::White);

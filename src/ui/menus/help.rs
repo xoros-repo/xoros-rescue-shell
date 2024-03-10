@@ -1,13 +1,22 @@
 use cursive::menu;
 use cursive::menu::Tree;
-use cursive::views::Dialog;
+use cursive::views::{Dialog, TextView};
 
 pub fn help_menu(v: &str) -> Tree {
     let version = v.to_string();
 
     let tree = menu::Tree::new()
         .leaf("About", move |s| {
-            s.add_layer(Dialog::info(format!("Xoros Rescue Shell v{}", version)))
+            s.add_layer(Dialog::text(format!("Xoros Rescue Shell v{}", version))
+                .title("About")
+                .button("Close", |s| s.quit())
+                .button("System Info", |s| {
+
+                    let sys_info = "System info placeholder: CPU, RAM, etc.";
+                    s.add_layer(Dialog::around(TextView::new(sys_info)).button("Ok", |s| {
+                        s.pop_layer();
+                    }));
+                }))
         }).subtree(
         "Help",
         menu::Tree::new()
