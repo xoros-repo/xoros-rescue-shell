@@ -1,6 +1,7 @@
 use cursive::menu;
 use cursive::menu::Tree;
-use cursive::views::{Dialog, TextView};
+use cursive::views::{Dialog, ScrollView, TextView};
+use crate::sys::info::disks_info;
 
 pub fn help_menu(v: &str) -> Tree {
     let version = v.to_string();
@@ -13,7 +14,7 @@ pub fn help_menu(v: &str) -> Tree {
                 .button("System Info", |s| {
 
                     let sys_info = "System info placeholder: CPU, RAM, etc.";
-                    s.add_layer(Dialog::around(TextView::new(sys_info)).button("Ok", |s| {
+                    s.add_layer(Dialog::around(ScrollView::new(TextView::new(disks_info()))).button("Ok", |s| {
                         s.pop_layer();
                     }));
                 }))
