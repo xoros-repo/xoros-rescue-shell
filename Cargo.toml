@@ -8,8 +8,10 @@ repository = "https://github.com/xoros-repo/xoros-rescue-shell.git"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-crossterm = "0.27.0"
-cursive = { version = "0.20.0", default-features = false, features = ["crossterm-backend"]}
-cursive_buffered_backend = "0.6.1"
+crossterm = "0.27"
+cursive = { version = "0.20", default-features = false, features = ["crossterm", "crossterm-backend"]}
+cursive_buffered_backend = "0.6"
 sysinfo = "*"
-
+lazy_static = "1.4"
+chrono = "0.4"
+subprocess = "0.2"
