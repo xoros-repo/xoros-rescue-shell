@@ -1,7 +1,12 @@
+use std::{env, io};
+use std::io::Write;
+use std::os::fd::AsRawFd;
 use cursive::{CursiveExt, menu};
 use cursive::menu::Tree;
 use cursive::views::Dialog;
 use subprocess::Exec;
+use cursive::traits::*;
+use termios::{TCSANOW, tcsetattr, Termios};
 
 pub fn recovery_menu() -> Tree {
     let tree = menu::Tree::new()
@@ -12,16 +17,23 @@ pub fn recovery_menu() -> Tree {
             s.add_layer(Dialog::info("Config was restored!"));
         })
         .leaf("Subshell", move |s| {
+            // Save current terminal state to avoid messing up the terminal after shell -> reset
+            let stdin_fd = io::stdin().as_raw_fd();
+            let original_termios = Termios::from_fd(stdin_fd).unwrap();
             let state = s.dump();
 
-            let exit_status = Exec::shell("/bin/sh")
+            let shell_exec = env::var("SHELL").unwrap_or("/bin/sh".to_string());
+
+            tcsetattr(stdin_fd, TCSANOW, &original_termios).expect("TODO: panic message");
+            let shell_exit_status = Exec::shell(format!("{0} -c reset; {0}", shell_exec))
                 .detached()  // This detaches the shell from the parent process
                 .join()      // Wait for the shell to finish
                 .expect("Failed to launch shell");
 
+            io::stdout().flush().expect("TODO: panic message");
+            tcsetattr(stdin_fd, TCSANOW, &original_termios).expect("TODO: panic message");
             s.restore(state);
-
-            s.add_layer(Dialog::info(format!("Shell exited with status: {:?}", exit_status)));
+            s.clear();
         })
         .delimiter()
         .leaf("Complete Reset", move |s| {
