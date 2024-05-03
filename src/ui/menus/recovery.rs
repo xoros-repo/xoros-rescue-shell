@@ -26,6 +26,7 @@ pub fn recovery_menu() -> Tree {
 
             tcsetattr(stdin_fd, TCSANOW, &original_termios).expect("TODO: panic message");
             let shell_exit_status = Exec::shell(format!("{0} -c reset; {0}", shell_exec))
+                .env("PS1", "rescue-shell# ")
                 .detached()  // This detaches the shell from the parent process
                 .join()      // Wait for the shell to finish
                 .expect("Failed to launch shell");
