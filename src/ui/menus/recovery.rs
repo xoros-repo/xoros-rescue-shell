@@ -24,14 +24,14 @@ pub fn recovery_menu() -> Tree {
 
             let shell_exec = env::var("SHELL").unwrap_or("/bin/sh".to_string());
 
-            tcsetattr(stdin_fd, TCSANOW, &original_termios).expect("TODO: panic message");
-            let shell_exit_status = Exec::shell(format!("{0} -c reset; {0}", shell_exec))
-                .env("PS1", "rescue-shell# ")
+            // tcsetattr(stdin_fd, TCSANOW, &original_termios).expect("TODO: panic message");
+            io::stdout().flush().expect("TODO: panic message");
+
+            let shell_exit_status = Exec::shell(format!("{0} -c 'export PS1=\"rescue-shell# \"; reset; {0}'", "/bin/sh"))
                 .detached()  // This detaches the shell from the parent process
                 .join()      // Wait for the shell to finish
                 .expect("Failed to launch shell");
 
-            io::stdout().flush().expect("TODO: panic message");
             tcsetattr(stdin_fd, TCSANOW, &original_termios).expect("TODO: panic message");
             s.restore(state);
             s.clear();
