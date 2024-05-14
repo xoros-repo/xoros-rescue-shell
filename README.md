@@ -12,3 +12,6 @@ It is designed to provide all necessary tools to manage the system and to perfor
 - ** Partition management **: List, recover, set good/bad flags, etc.
 - ** System Configuration **: Backup/recover/reset system configuration.
 - ** System Testing **: Run system tests, check system status, etc.
+
+## Menu Structure
+
