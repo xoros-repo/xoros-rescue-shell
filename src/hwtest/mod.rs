@@ -4,7 +4,7 @@
 //! Every test runs inside a [`TaskRunner`](crate::tasks::TaskRunner) worker (progress and
 //! cancel, UI-3) through [`run_recorded`], which turns the outcome into a [`TestResult`]
 //! (pass/warning/fail/aborted/error, duration, details), logs it (LOG-3) and keeps it for the
-//! session in [`ResultStore`]: in memory and in `<run dir>/test-results.json`, so later CLI
+//! session in [`ResultStore`]: in memory and in `<run dir>/test-results/`, so later CLI
 //! calls, a restarted TUI and the diagnostics bundle (LOG-2) see it too. No cursive (ARCH-1).
 
 pub mod diskread;
@@ -24,8 +24,11 @@ use crate::backend::{PartRole, SystemBackend};
 use crate::slots::RescueCheck;
 use crate::tasks::{lock, TaskCtx, TaskFailure, TaskKind};
 
-/// File below the run directory with the results of this boot (LOG-2 includes it).
-pub const RESULTS_FILE: &str = "test-results.json";
+/// Directory below the run directory with the results of this boot; the diagnostics bundle
+/// (LOG-2) includes every file in it.
+pub const RESULTS_SUBDIR: &str = "test-results";
+/// All results of this boot (JSON), in [`RESULTS_SUBDIR`].
+pub const RESULTS_FILE: &str = "results.json";
 
 /// Which test.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,6 +68,18 @@ impl TestKind {
             TestKind::SlotIntegrity => "TST-4",
             TestKind::RescueIntegrity => "TST-5",
             TestKind::FsCheck | TestKind::FsRepair => "TST-6",
+        }
+    }
+
+    /// Text report in [`RESULTS_SUBDIR`] with every result of this kind of this boot.
+    pub fn file_name(self) -> &'static str {
+        match self {
+            TestKind::Memory => "memory.txt",
+            TestKind::DiskRead => "disk-read.txt",
+            TestKind::SlotIntegrity => "slots.txt",
+            TestKind::RescueIntegrity => "rescue.txt",
+            TestKind::FsCheck => "fsck.txt",
+            TestKind::FsRepair => "fsck-repair.txt",
         }
     }
 }
@@ -172,25 +187,29 @@ impl TestResult {
     }
 }
 
-/// Results of this session (boot): in memory and in `<run dir>/test-results.json`.
+/// Results of this session (boot): in memory and in `<run dir>/test-results/`
+/// (`results.json` plus one text report per test kind, e.g. `memory.txt`).
 pub struct ResultStore {
-    path: Option<PathBuf>,
+    dir: Option<PathBuf>,
     results: Mutex<Vec<TestResult>>,
 }
+
+/// Between two results in a text report.
+const SEPARATOR: &str = "\n------------------------------------------------------------\n\n";
 
 /// Results kept per boot (oldest are dropped).
 const MAX_RESULTS: usize = 100;
 
 impl ResultStore {
-    /// Store backed by `<run_dir>/test-results.json`; earlier results of this boot are loaded.
+    /// Store backed by `<run_dir>/test-results/`; earlier results of this boot are loaded.
     pub fn new(run_dir: &Path) -> Self {
-        let path = run_dir.join(RESULTS_FILE);
-        let results = std::fs::read_to_string(&path)
+        let dir = run_dir.join(RESULTS_SUBDIR);
+        let results = std::fs::read_to_string(dir.join(RESULTS_FILE))
             .ok()
             .and_then(|t| serde_json::from_str(&t).ok())
             .unwrap_or_default();
         ResultStore {
-            path: Some(path),
+            dir: Some(dir),
             results: Mutex::new(results),
         }
     }
@@ -198,16 +217,17 @@ impl ResultStore {
     /// Store without a file (tests).
     pub fn in_memory() -> Self {
         ResultStore {
-            path: None,
+            dir: None,
             results: Mutex::new(Vec::new()),
         }
     }
 
-    pub fn path(&self) -> Option<&Path> {
-        self.path.as_deref()
+    /// The results directory (`None` for an in-memory store).
+    pub fn dir(&self) -> Option<&Path> {
+        self.dir.as_deref()
     }
 
-    /// Keep and log a result (LOG-3), and rewrite the results file.
+    /// Keep and log a result (LOG-3), and rewrite the results files.
     pub fn record(&self, r: TestResult) {
         match r.outcome {
             Outcome::Pass | Outcome::Warning => log::info!("test: {}", r.headline()),
@@ -217,22 +237,29 @@ impl ResultStore {
         for line in r.details.lines().filter(|l| !l.trim().is_empty()).take(40) {
             log::info!("test:   {line}");
         }
+        let kind = r.kind;
         let mut all = lock(&self.results);
         all.push(r);
         let excess = all.len().saturating_sub(MAX_RESULTS);
         all.drain(..excess);
-        if let Some(path) = &self.path {
-            let written = serde_json::to_string_pretty(&*all)
-                .map_err(|e| e.to_string())
-                .and_then(|text| {
-                    if let Some(dir) = path.parent() {
-                        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-                    }
-                    std::fs::write(path, text + "\n").map_err(|e| e.to_string())
-                });
-            if let Err(e) = written {
-                log::warn!("cannot write {}: {e}", path.display());
-            }
+        let Some(dir) = &self.dir else { return };
+        let report = all
+            .iter()
+            .filter(|x| x.kind == kind)
+            .map(|x| x.text())
+            .collect::<Vec<_>>()
+            .join(SEPARATOR);
+        let json = serde_json::to_string_pretty(&*all).map_err(|e| e.to_string());
+        drop(all);
+        let write = |name: &str, text: String| {
+            std::fs::write(dir.join(name), text).map_err(|e| e.to_string())
+        };
+        let written = std::fs::create_dir_all(dir)
+            .map_err(|e| e.to_string())
+            .and_then(|_| write(kind.file_name(), report))
+            .and_then(|_| write(RESULTS_FILE, json? + "\n"));
+        if let Err(e) = written {
+            log::warn!("cannot write test results to {}: {e}", dir.display());
         }
     }
 
@@ -250,7 +277,7 @@ impl ResultStore {
         all.iter()
             .map(|r| r.text())
             .collect::<Vec<_>>()
-            .join("\n------------------------------------------------------------\n\n")
+            .join(SEPARATOR)
     }
 }
 
@@ -521,6 +548,11 @@ mod tests {
         assert_eq!(again.all(), store.all());
         assert_eq!(again.all().len(), 3);
         assert!(again.text().contains("Memory test"));
+        let dir = d.path().join(RESULTS_SUBDIR);
+        let disk = std::fs::read_to_string(dir.join("disk-read.txt")).expect("disk-read.txt");
+        assert!(disk.contains("Result:   PASS"));
+        assert!(std::fs::read_to_string(dir.join("fsck.txt")).is_ok_and(|t| t.contains("ERROR")));
+        assert!(dir.join("memory.txt").is_file() && dir.join(RESULTS_FILE).is_file());
         assert!(ResultStore::in_memory().text().contains("No tests"));
     }
 }
