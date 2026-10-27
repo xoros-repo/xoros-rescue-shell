@@ -60,7 +60,7 @@ Usage:
   xoros-rescue-shell [--sim <dir>] --cli backup verify <stick> <name>
   xoros-rescue-shell [--sim <dir>] --cli backup import <stick> <name> [--merge] [overlay] [application]
   xoros-rescue-shell [--sim <dir>] --cli backup reset config|full --confirm RESET [--reset-rescue]
-  xoros-rescue-shell [--sim <dir>] --cli update check [<source>]
+  xoros-rescue-shell [--sim <dir>] --cli update check [<source>] [--no-hash]
   xoros-rescue-shell [--sim <dir>] --cli update scan <stick>
   xoros-rescue-shell [--sim <dir>] --cli update start --slot A|B|AB [<source>] [--image <timestamp>]
                      [--allow-downgrade] [--allow-unverified] [--no-resume] [--confirm WRITE]
@@ -78,6 +78,11 @@ Options:
 Update sources (default: the OTA server for the newest valid slot):
   --base <url> [--proxy <url>] [--version <v>] [--machine <m>] [--suffix <s>]
   --stick <id> --path <dir or image on the stick>   (see 'update scan')
+
+Exit codes:
+  0  success
+  1  error: the operation failed or completed only partly
+  2  the command line could not be parsed
 "
     )
 }
@@ -315,7 +320,12 @@ fn backup_cmd(app: &App, args: &[String]) -> Result<String, String> {
             let out = run_cli_job(app, "Backup import", move |ctx| {
                 backup_jobs::run_import(backend.as_ref(), &req, ctx)
             })?;
-            Ok(backup_jobs::import_summary(&name, &out) + "\n")
+            let summary = backup_jobs::import_summary(&name, &out) + "\n";
+            if out.report.error_count > 0 {
+                // Partly restored: a failure for scripts.
+                return Err(summary);
+            }
+            Ok(summary)
         }
         Some("reset") => {
             let full = match arg(1, "config|full")?.as_str() {
@@ -338,7 +348,11 @@ fn backup_cmd(app: &App, args: &[String]) -> Result<String, String> {
             let rep = run_cli_job(app, "Factory reset", move |ctx| {
                 backup_jobs::run_reset(backend.as_ref(), &req, ctx)
             })?;
-            Ok(backup_jobs::reset_summary(&req2, &rep) + "\n")
+            let summary = backup_jobs::reset_summary(&req2, &rep) + "\n";
+            if !rep.errors.is_empty() {
+                return Err(summary);
+            }
+            Ok(summary)
         }
         _ => Err("backup needs: sticks | list | export | verify | import | reset.".into()),
     }
@@ -410,8 +424,26 @@ fn origin_arg(app: &App, args: &[String]) -> Result<update_jobs::Origin, String>
     })
 }
 
-fn rescue_sha(app: &App) -> Option<String> {
-    lock(&app.rescue_check).sha256().map(str::to_string)
+/// SHA-256 of the running rescue image (for "matches current rescue", OTA-9). Computed here
+/// (the CLI has no background check) unless `--no-hash` is given.
+fn rescue_sha(app: &App, args: &[String]) -> Option<String> {
+    if has_flag(args, "--no-hash") {
+        return None;
+    }
+    if lock(&app.rescue_check).sha256().is_none() {
+        eprintln!("Computing the SHA-256 of the rescue partition (skip with --no-hash)...");
+        match app.start_rescue_check(None) {
+            Ok(h) => {
+                h.wait();
+            }
+            Err(e) => *lock(&app.rescue_check) = RescueCheck::Failed(e.to_string()),
+        }
+    }
+    let check = lock(&app.rescue_check).clone();
+    if let RescueCheck::Failed(e) = &check {
+        eprintln!("warning: rescue image SHA-256 not available: {e}");
+    }
+    check.sha256().map(str::to_string)
 }
 
 fn update_cmd(app: &App, args: &[String]) -> Result<String, String> {
@@ -428,7 +460,7 @@ fn update_cmd(app: &App, args: &[String]) -> Result<String, String> {
         }
         Some("check") => {
             let origin = origin_arg(app, &args[1..])?;
-            let sha = rescue_sha(app);
+            let sha = rescue_sha(app, args);
             let c = run_cli_job(app, "Update check", move |ctx| {
                 update_jobs::check(backend.as_ref(), &origin, sha.as_deref(), ctx)
             })?;
@@ -446,7 +478,7 @@ fn update_cmd(app: &App, args: &[String]) -> Result<String, String> {
                 ));
             }
             let origin = origin_arg(app, &args[1..])?;
-            let sha = rescue_sha(app);
+            let sha = rescue_sha(app, args);
             let b2 = Arc::clone(&backend);
             let o2 = origin.clone();
             let c = run_cli_job(app, "Update check", move |ctx| {
@@ -502,6 +534,9 @@ fn net_cmd(app: &App, args: &[String]) -> Result<String, String> {
             let mut t = rep.text();
             for f in &rep.files {
                 t.push_str(&format!("wrote {}\n", f.display()));
+            }
+            if rep.interfaces.is_empty() || !rep.notes.is_empty() {
+                return Err(t);
             }
             Ok(t)
         }
