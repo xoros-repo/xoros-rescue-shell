@@ -1,62 +1,92 @@
-use cursive::{Cursive, event::Key, View, views, views::Dialog};
-use cursive::traits::*;
-use cursive::views::{Layer, ScrollView, TextView};
-use xoros_rescue_shell::sys::actions::{beep, quit_handler};
+//! Entry point: argument parsing, logging, panic hook, then TUI or CLI (section 9.2).
 
-use xoros_rescue_shell::ui::menus::configs::config_menu;
-use xoros_rescue_shell::ui::menus::help::help_menu;
-use xoros_rescue_shell::ui::menus::recovery::recovery_menu;
-use xoros_rescue_shell::ui::menus::tests::tests_menu;
-use xoros_rescue_shell::ui::status_bar::StatusBarExt;
+use std::process::ExitCode;
 
-mod theme;
+use xoros_rescue_shell::app::{make_backend, sim_dir, App};
+use xoros_rescue_shell::backend::sim::SimBackend;
+use xoros_rescue_shell::cli::{
+    parse_args, run_backup, run_net, run_status, run_time, run_update, usage, Command,
+};
+use xoros_rescue_shell::constants::{APP_NAME, APP_VERSION};
+use xoros_rescue_shell::{logging, terminal, ui};
 
-fn main() {
-    beep::simple();
-
-    let backend_init = || -> std::io::Result<Box<dyn cursive::backend::Backend>> {
-        let backend = cursive::backends::crossterm::Backend::init()?;
-        let buffered_backend = cursive_buffered_backend::BufferedBackend::new(backend);
-        Ok(Box::new(buffered_backend))
+fn main() -> ExitCode {
+    let opts = match parse_args(std::env::args().skip(1)) {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("error: {e}\n\n{}", usage());
+            return ExitCode::from(2);
+        }
     };
+    match opts.command {
+        Command::Help => {
+            print!("{}", usage());
+            return ExitCode::SUCCESS;
+        }
+        Command::Version => {
+            println!("{APP_NAME} {APP_VERSION}");
+            return ExitCode::SUCCESS;
+        }
+        Command::SimInit(dir) => {
+            return match SimBackend::create_example(&dir) {
+                Ok(()) => {
+                    println!("Simulation directory created: {}", dir.display());
+                    println!("Run: xoros-rescue-shell --sim {}", dir.display());
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
+        Command::Tui
+        | Command::Status { .. }
+        | Command::Backup(_)
+        | Command::Update(_)
+        | Command::Net(_)
+        | Command::Time(_) => {}
+    }
 
-    const VERSION: &str = env!("CARGO_PKG_VERSION");
+    let backend = match make_backend(sim_dir(opts.sim)) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let tui = opts.command == Command::Tui;
+    logging::init(&backend.run_dir(), log::LevelFilter::Info, tui);
+    terminal::save_startup_state();
+    terminal::install_panic_hook();
+    log::info!("{APP_NAME} {APP_VERSION} starting ({})", backend.describe());
 
-    let mut app = Cursive::new();
-    let theme = theme::theme();
-    app.set_theme(theme);
+    let app = App::new(backend);
+    match opts.command {
+        Command::Status { json, hash } => match run_status(&app, json, hash) {
+            0 => ExitCode::SUCCESS,
+            _ => ExitCode::FAILURE,
+        },
+        Command::Backup(args) => exit(run_backup(&app, &args)),
+        Command::Update(args) => exit(run_update(&app, &args)),
+        Command::Net(args) => exit(run_net(&app, &args)),
+        Command::Time(args) => exit(run_time(&app, &args)),
+        _ => match ui::run(app) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                terminal::restore_terminal();
+                log::error!("UI error: {e}");
+                eprintln!("error: {e}");
+                ExitCode::FAILURE
+            }
+        },
+    }
+}
 
-    app.menubar()
-        .add_subtree(
-            "Configs",
-            config_menu(),
-        )
-        .add_subtree(
-            "Tests",
-            tests_menu(),
-        )
-        .add_subtree(
-            "Recovery",
-            recovery_menu(),
-        )
-        .add_subtree(
-            "Help",
-            help_menu(VERSION),
-        )
-        .add_delimiter()
-        .add_leaf("Reboot", |s| quit_handler());
-
-    // Show application wide log window at the bottom of the screen:
-    let log_view = Layer::new(ScrollView::new(TextView::new("")))
-        .full_width()
-        .fixed_height(5)
-        .with_name("log_view")
-        .full_screen();
-
-    app.add_global_callback(Key::Esc, |s| s.select_menubar());
-
-    app.add_layer(Dialog::text("Press ESC for menu..."));
-    app.status_bar(format!("Xoros Rescue Shell v{} - [Ctrl-C: Exit]", VERSION));
-    app.set_fps(15);
-    app.try_run_with(backend_init).ok();
+fn exit(code: i32) -> ExitCode {
+    if code == 0 {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
 }

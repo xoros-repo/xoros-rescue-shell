@@ -1,4 +1,25 @@
-pub mod ui;
-pub mod sys;
+//! XorOS rescue shell. Everything outside `ui` is independent of cursive (ARCH-1).
 
-pub mod models;
+pub mod app;
+pub mod backend;
+pub mod backup;
+pub mod backup_jobs;
+pub mod boot;
+pub mod cli;
+pub mod clock;
+pub mod cmd;
+pub mod constants;
+pub mod hw;
+pub mod logging;
+pub mod logs;
+pub mod net;
+pub mod power;
+pub mod report;
+pub mod slots;
+pub mod status;
+pub mod sysinfo;
+pub mod tasks;
+pub mod terminal;
+pub mod texts;
+pub mod ui;
+pub mod update_jobs;
