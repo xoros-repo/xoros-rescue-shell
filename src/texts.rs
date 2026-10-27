@@ -94,3 +94,7 @@ its slot. Data on the application partition is kept.";
 pub const FULL_RESET_EXPLANATION: &str = "Deletes all changes to /etc of the normal system \
 (overlay partition) AND all data on the application partition (/opt: apps, Docker data, \
 user data).";
+
+pub const SSH_INFO: &str = "Remote support: starts sshd with a one-time root password. \
+Anyone on the network who knows the password can log in as root. Stop it when done; it also \
+stops when the rescue shell exits. Public keys can be loaded from 'authorized_keys' on a stick.";

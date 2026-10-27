@@ -1,4 +1,5 @@
-//! Tools menu: logs (LOG-1), background tasks, subshell (SH-1), about.
+//! Tools menu: logs (LOG-1), background tasks, diagnostics bundle (LOG-2), subshell (SH-1),
+//! remote access (SSH-1), about.
 
 use std::sync::Arc;
 
@@ -12,8 +13,9 @@ use crate::logs::{read_log, search, LogSource};
 use crate::tasks::TaskState;
 use crate::texts;
 use crate::ui::dialogs::{self, closable, MAX_H, MAX_W};
+use crate::ui::jobs::{self, JobEnd};
 use crate::ui::progress::{describe, show_task};
-use crate::ui::{app, show_screen, todo_leaf};
+use crate::ui::{app, pop_to_base, show_screen};
 
 const LOG_TEXT: &str = "log_text";
 
@@ -25,10 +27,11 @@ pub fn menu() -> Tree {
     let t = Tree::new()
         .subtree("Logs", logs)
         .leaf(texts::TITLE_TASKS, show_tasks);
-    let t = todo_leaf(t, "Diagnostics bundle", "The diagnostics bundle (LOG-2)");
-    let t = t.leaf("Subshell", subshell);
-    let t = todo_leaf(t, "Remote access (SSH)", "Remote access via SSH (SSH-1)");
-    t.delimiter().leaf(texts::TITLE_ABOUT, about)
+    t.leaf("Diagnostics bundle", diagnostics_bundle)
+        .leaf("Subshell", subshell)
+        .leaf("Remote access (SSH)", remote_access)
+        .delimiter()
+        .leaf(texts::TITLE_ABOUT, about)
 }
 
 fn show_log(s: &mut Cursive, src: LogSource) {
@@ -155,4 +158,113 @@ fn about(s: &mut Cursive) {
             .unwrap_or_else(|| "(memory only)".into())
     );
     dialogs::info(s, texts::TITLE_ABOUT, &text);
+}
+
+const JOB_DIALOG: &str = "tools_job_progress";
+
+/// Result of a job as a text screen or error dialog.
+pub fn show_job_end(s: &mut Cursive, title: &str, end: JobEnd<String>) {
+    match end {
+        JobEnd::Ok(t) => s.add_layer(dialogs::text_screen(title, &t)),
+        JobEnd::Cancelled => dialogs::info(s, title, "Cancelled."),
+        JobEnd::Failed(e) => dialogs::error(s, &format!("{title} failed."), &e),
+    }
+}
+
+/// LOG-2: diagnostics bundle to a stick.
+fn diagnostics_bundle(s: &mut Cursive) {
+    pop_to_base(s);
+    crate::ui::backup::choose_stick(s, "Diagnostics bundle", |s, stick| {
+        jobs::run(
+            s,
+            "Diagnostics bundle",
+            crate::tasks::TaskKind::ReadOnly,
+            JOB_DIALOG,
+            move |app, ctx| {
+                crate::diagnostics::write_bundle(app, &stick, Some(ctx)).map(|name| {
+                    format!(
+                        "Written to {}:\n  {name}\n\nIt contains the system report, boot \
+                         variables, logs, test and network results; no Wi-Fi passphrases.",
+                        stick.id
+                    )
+                })
+            },
+            |s, end| show_job_end(s, "Diagnostics bundle", end),
+        );
+    });
+}
+
+/// SSH-1: status with Start/Stop and loading authorized keys from a stick.
+fn remote_access(s: &mut Cursive) {
+    let Some(app) = app(s) else { return };
+    let env = crate::net::NetEnv::for_backend(app.backend.as_ref());
+    let st = crate::net::ssh::status(&env);
+    let text = format!("{}\n\n{}", texts::SSH_INFO, st.text());
+    let start_label = if st.running {
+        "Restart (new password)"
+    } else {
+        "Start"
+    };
+    show_screen(
+        s,
+        closable(
+            Dialog::around(dialogs::scroll_text(text))
+                .title("Remote access (SSH)")
+                .button(start_label, |s| ssh_action(s, true))
+                .button("Stop", |s| ssh_action(s, false))
+                .button("Keys from stick", ssh_keys_from_stick)
+                .dismiss_button(texts::BTN_CLOSE),
+        ),
+    );
+}
+
+fn ssh_action(s: &mut Cursive, start: bool) {
+    let title = if start {
+        "Start remote access"
+    } else {
+        "Stop remote access"
+    };
+    jobs::run(
+        s,
+        title,
+        crate::tasks::TaskKind::ReadOnly,
+        JOB_DIALOG,
+        move |app, ctx| {
+            let env = crate::net::NetEnv::for_backend(app.backend.as_ref());
+            if start {
+                ctx.set_message("Starting sshd");
+                let r = crate::net::ssh::start(&env)?;
+                crate::ui::mark_ssh_started();
+                Ok(r.text())
+            } else {
+                ctx.set_message("Stopping sshd");
+                Ok(match crate::net::ssh::stop(&env)? {
+                    true => "sshd stopped; the one-time password is no longer valid.".to_string(),
+                    false => "sshd was not running.".to_string(),
+                })
+            }
+        },
+        move |s, end| {
+            pop_to_base(s);
+            show_job_end(s, title, end)
+        },
+    );
+}
+
+fn ssh_keys_from_stick(s: &mut Cursive) {
+    crate::ui::backup::choose_stick(s, "SSH keys from stick", |s, stick| {
+        let Some(app) = app(s) else { return };
+        let env = crate::net::NetEnv::for_backend(app.backend.as_ref());
+        let r = crate::cli_net::keys_from_stick(&app, &stick).and_then(|t| {
+            crate::net::ssh::add_authorized_keys(&env, &t).map_err(|e| e.to_string())
+        });
+        match r {
+            Ok(n) => dialogs::info(
+                s,
+                "SSH keys",
+                &format!("{n} key(s) added. They are valid until reboot."),
+            ),
+            Err(e) => dialogs::error(s, "Cannot load SSH keys.", &e),
+        }
+    });
 }
