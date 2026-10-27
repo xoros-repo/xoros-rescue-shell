@@ -714,6 +714,12 @@ pub trait SystemBackend: Send + Sync {
     fn slot_written(&self, _slot: Slot, _info: &BuildInfo) -> Result<()> {
         Ok(())
     }
+
+    /// Mount a slot's root file system read-only (squashfs) under `<run dir>/mnt/<label>`, to
+    /// read files of the normal system such as its NetworkManager keyfiles (NET-8).
+    fn mount_slot(&self, _slot: Slot) -> Result<MountGuard> {
+        Err(BackendError::not_available("Mounting a slot"))
+    }
 }
 
 /// Refuse roles that are not persistent partitions (NF-4: never write boot/rootfs/rescue).

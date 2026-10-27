@@ -689,6 +689,20 @@ impl SystemBackend for SimBackend {
         log::info!("SIM: {slot} build info recorded");
         self.store(&s)
     }
+
+    /// `<sim>/slots/<label>/`: a directory standing for the slot's root file system (NET-8).
+    fn mount_slot(&self, slot: Slot) -> Result<MountGuard> {
+        let s = self.load()?;
+        Self::check_fail(&s, &format!("mount_slot.{}", slot.letter()))?;
+        let dir = self.dir.join("slots").join(slot.label());
+        if !dir.is_dir() {
+            return Err(BackendError::new(
+                ErrorKind::Io,
+                format!("{} has no simulated root file system.", slot.label()),
+            ));
+        }
+        Ok(MountGuard::directory(dir))
+    }
 }
 
 fn example_build(suffix: &str, ts: &str) -> BuildInfo {

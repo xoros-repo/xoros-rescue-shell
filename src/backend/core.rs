@@ -579,6 +579,13 @@ impl SystemBackend for CoreBackend {
             .open_read(PartRole::slot(slot).into())
             .map_err(core_err)
     }
+
+    fn mount_slot(&self, slot: Slot) -> Result<MountGuard> {
+        let layout = self.core_layout()?;
+        let part = layout.partition(PartRole::slot(slot).into());
+        let target = self.paths.mount_dir.join(slot.label());
+        self.mount_fs(&part.node, part.dev, &target, &["squashfs"], false)
+    }
 }
 
 #[cfg(test)]

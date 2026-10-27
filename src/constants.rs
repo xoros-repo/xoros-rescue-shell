@@ -108,6 +108,22 @@ pub const RESOLV_CONF_NAME: &str = "resolv.conf";
 /// udhcpc script written below the run directory (NET-1 fallback).
 pub const UDHCPC_SCRIPT_NAME: &str = "udhcpc.script";
 
+/// Rescue network configuration: in the run directory (current) and in the overlay
+/// partition's `rescue/` directory (remembered for the next rescue boot, NET-5).
+pub const NETWORK_JSON_NAME: &str = "network.json";
+
+/// NetworkManager keyfile directory of the normal system below `/etc` (section 4.6, NET-6).
+pub const NM_CONNECTIONS_DIR: &str = "NetworkManager/system-connections";
+
+/// Last network test report below the run directory (NET-4, part of LOG-2).
+pub const NET_TEST_REPORT_NAME: &str = "net-test.txt";
+
+/// Test reports (TST-*) below the run directory, collected into the diagnostics bundle (LOG-2).
+pub const TEST_RESULTS_SUBDIR: &str = "test-results";
+
+/// sshd state (config, host key, password file) below the run directory (SSH-1).
+pub const SSH_SUBDIR: &str = "ssh";
+
 /// Default OTA server (OTA, CFG-1 `ota_base_url`).
 pub const DEFAULT_OTA_BASE_URL: &str = core::DEFAULT_OTA_BASE_URL;
 
