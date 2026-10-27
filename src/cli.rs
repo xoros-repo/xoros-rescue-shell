@@ -68,9 +68,9 @@ Usage:
   xoros-rescue-shell [--sim <dir>] --cli backup verify <stick> <name>
   xoros-rescue-shell [--sim <dir>] --cli backup import <stick> <name> [--merge] [overlay] [application]
   xoros-rescue-shell [--sim <dir>] --cli backup reset config|full --confirm RESET [--reset-rescue]
-  xoros-rescue-shell [--sim <dir>] --cli update check [<source>] [--no-hash]
+  xoros-rescue-shell [--sim <dir>] --cli update check [<source options>] [--no-hash]
   xoros-rescue-shell [--sim <dir>] --cli update scan <stick>
-  xoros-rescue-shell [--sim <dir>] --cli update start --slot A|B|AB [<source>] [--image <timestamp>]
+  xoros-rescue-shell [--sim <dir>] --cli update start --slot A|B|AB [<source options>] [--image <timestamp>]
                      [--allow-downgrade] [--allow-unverified] [--no-resume] [--confirm WRITE]
   xoros-rescue-shell [--sim <dir>] --cli net up | dns | test [--base <url>] [--proxy <url>]
   xoros-rescue-shell [--sim <dir>] --cli time show | sync [<server>...] | set 'YYYY-MM-DD HH:MM[:SS]'
@@ -422,6 +422,33 @@ fn has_flag(args: &[String], name: &str) -> bool {
     args.iter().any(|a| a == name)
 }
 
+/// Options of the update source (`origin_arg`).
+const SOURCE_OPTIONS: &[&str] = &[
+    "--base",
+    "--proxy",
+    "--version",
+    "--machine",
+    "--suffix",
+    "--stick",
+    "--path",
+];
+
+/// Reject arguments that are neither one of `values` (followed by a value) nor one of `flags`,
+/// so a typo does not silently fall back to a default (e.g. the default OTA server).
+fn check_options(args: &[String], values: &[&str], flags: &[&str]) -> Result<(), String> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if values.contains(&a.as_str()) {
+            if it.next().is_none() {
+                return Err(format!("{a} needs a value."));
+            }
+        } else if !flags.contains(&a.as_str()) {
+            return Err(format!("Unknown argument '{a}'."));
+        }
+    }
+    Ok(())
+}
+
 /// The update source from `--stick/--path` or `--base/--version/--machine/--suffix`.
 fn origin_arg(app: &App, args: &[String]) -> Result<update_jobs::Origin, String> {
     use std::str::FromStr;
@@ -497,6 +524,7 @@ fn update_cmd(app: &App, args: &[String]) -> Result<String, String> {
             Ok(items.iter().map(|i| i.label() + "\n").collect())
         }
         Some("check") => {
+            check_options(&args[1..], SOURCE_OPTIONS, &["--no-hash"])?;
             let origin = origin_arg(app, &args[1..])?;
             let sha = rescue_sha(app, args);
             let c = run_cli_job(app, "Update check", move |ctx| {
@@ -505,6 +533,12 @@ fn update_cmd(app: &App, args: &[String]) -> Result<String, String> {
             Ok(c.text())
         }
         Some("start") => {
+            let values = [SOURCE_OPTIONS, &["--slot", "--image", "--confirm"]].concat();
+            check_options(
+                &args[1..],
+                &values,
+                &["--no-hash", "--allow-downgrade", "--allow-unverified", "--no-resume"],
+            )?;
             let targets: update_jobs::Targets = opt_value(args, "--slot")
                 .ok_or("update start: missing --slot A|B|AB.")?
                 .parse()?;
@@ -832,6 +866,16 @@ pub fn run_ssh(app: &App, args: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn check_options_rejects_unknown_and_missing_values() {
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let flags = ["--no-hash"];
+        assert!(check_options(&a(&["--base", "http://x", "--no-hash"]), SOURCE_OPTIONS, &flags).is_ok());
+        assert!(check_options(&a(&["http://x"]), SOURCE_OPTIONS, &flags).is_err());
+        assert!(check_options(&a(&["--base"]), SOURCE_OPTIONS, &flags).is_err());
+        assert!(check_options(&a(&["--bsae", "http://x"]), SOURCE_OPTIONS, &flags).is_err());
+    }
 
     #[test]
     fn parse() {
