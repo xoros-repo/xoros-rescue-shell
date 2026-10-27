@@ -129,3 +129,7 @@ e2fsck answers yes to every question: damaged files may be moved to lost+found o
 Consider exporting a backup first (Backup -> Export).";
 
 pub const FSCK_REPAIR_WORD: &str = "REPAIR";
+
+pub const SSH_INFO: &str = "Remote support: starts sshd with a one-time root password. \
+Anyone on the network who knows the password can log in as root. Stop it when done; it also \
+stops when the rescue shell exits. Public keys can be loaded from 'authorized_keys' on a stick.";

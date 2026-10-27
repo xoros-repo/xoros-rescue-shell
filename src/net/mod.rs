@@ -1,4 +1,4 @@
-//! Rescue-side networking (NET-1, NET-3, NET-4, NET-7) without cursive (ARCH-1).
+//! Rescue-side networking (NET-*, SYS-4, SSH-1) without cursive (ARCH-1).
 //!
 //! - [`info`]: interface summary for the status screen;
 //! - [`config`]: automatic DHCP on Ethernet (`.network` files for systemd-networkd, `udhcpc`
@@ -6,7 +6,12 @@
 //! - [`dns`]: a stub resolver with an explicit server list, [`http`]: the app's HTTP client and
 //!   OTA image source using it;
 //! - [`sntp`] and [`time`]: time sync and manual time setting;
-//! - [`diag`]: the network test.
+//! - [`diag`]: the network test;
+//! - [`profile`]: per-interface configuration (DHCP/static, Wi-Fi via [`wifi`]) and the
+//!   remembered configuration (NET-2, NET-5);
+//! - [`nm`]: NetworkManager keyfiles for the normal system (NET-6, NET-8);
+//! - [`details`]: the network details screen (SYS-4);
+//! - [`ssh`]: remote support (SSH-1).
 //!
 //! Every effect on the system goes through a [`NetEnv`]: on a device files are written under
 //! `/run` and tools are run; in simulation mode (SIM-1) files go to `<sim>/run/...` and tool
@@ -14,12 +19,17 @@
 //! against the real host network in both modes.
 
 pub mod config;
+pub mod details;
 pub mod diag;
 pub mod dns;
 pub mod http;
 pub mod info;
+pub mod nm;
+pub mod profile;
 pub mod sntp;
+pub mod ssh;
 pub mod time;
+pub mod wifi;
 
 use std::path::PathBuf;
 

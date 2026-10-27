@@ -208,7 +208,24 @@ pub fn run(app: App) -> Result<(), String> {
     };
     siv.try_run_with(backend_init).map_err(|e| e.to_string())?;
     app.tasks.cancel_all();
+    stop_ssh_if_started(&app);
     Ok(())
+}
+
+/// sshd was started from this TUI (SSH-1: stop it when the app exits).
+static SSH_STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn mark_ssh_started() {
+    SSH_STARTED.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+fn stop_ssh_if_started(app: &App) {
+    if SSH_STARTED.load(std::sync::atomic::Ordering::SeqCst) {
+        let env = crate::net::NetEnv::for_backend(app.backend.as_ref());
+        if let Err(e) = crate::net::ssh::stop(&env) {
+            log::warn!("SSH-1: {e}");
+        }
+    }
 }
 
 /// A menu leaf that shows "not implemented yet" for `feature`.

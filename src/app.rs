@@ -76,16 +76,17 @@ impl App {
         )
     }
 
-    /// NET-1: DHCP on Ethernet in the background at start-up, then the app's `resolv.conf`
+    /// NET-5/NET-1: the remembered network configuration (if any) and DHCP on the other
+    /// Ethernet interfaces in the background at start-up, then the app's `resolv.conf`
     /// (NET-3). In simulation mode only files below `<sim>/run` are written.
     pub fn start_network_setup(&self) {
         let env = crate::net::NetEnv::for_backend(self.backend.as_ref());
+        let backend = Arc::clone(&self.backend);
         let spawned = std::thread::Builder::new()
             .name("net-setup".into())
             .spawn(move || {
-                match crate::net::config::bring_up_ethernet(&env) {
-                    Ok(r) => log::info!("NET-1: {}", r.text().trim()),
-                    Err(e) => log::error!("NET-1: {e}"),
+                for line in crate::net::profile::startup(&env, backend.as_ref()) {
+                    log::info!("{line}");
                 }
                 // Give DHCP some time, then pick up the DNS servers.
                 for _ in 0..3 {

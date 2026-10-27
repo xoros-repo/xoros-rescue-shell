@@ -110,7 +110,7 @@ impl DhcpReport {
     }
 }
 
-fn write_file(path: &Path, content: &str, mode: u32) -> io::Result<()> {
+pub(crate) fn write_file(path: &Path, content: &str, mode: u32) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
@@ -121,7 +121,7 @@ fn write_file(path: &Path, content: &str, mode: u32) -> io::Result<()> {
     fs::rename(&tmp, path)
 }
 
-fn networkd_running(env: &NetEnv) -> bool {
+pub(crate) fn networkd_running(env: &NetEnv) -> bool {
     match env.query_tool("systemctl", &["is-active", "systemd-networkd"]) {
         None => true, // simulation: pretend networkd runs
         Some(Ok(out)) => out.trim() == "active",
@@ -134,8 +134,17 @@ fn networkd_running(env: &NetEnv) -> bool {
 
 /// NET-1: DHCP on every Ethernet interface. Errors of single steps are notes, not failures.
 pub fn bring_up_ethernet(env: &NetEnv) -> io::Result<DhcpReport> {
+    bring_up_ethernet_except(env, &[])
+}
+
+/// NET-1 for the Ethernet interfaces not in `skip` (those have their own configuration,
+/// NET-2/NET-5).
+pub fn bring_up_ethernet_except(env: &NetEnv, skip: &[String]) -> io::Result<DhcpReport> {
     let mut rep = DhcpReport {
-        interfaces: ethernet_interfaces(env),
+        interfaces: ethernet_interfaces(env)
+            .into_iter()
+            .filter(|i| !skip.contains(i))
+            .collect(),
         ..DhcpReport::default()
     };
     if rep.interfaces.is_empty() {
@@ -155,22 +164,53 @@ pub fn bring_up_ethernet(env: &NetEnv) -> io::Result<DhcpReport> {
         }
     } else {
         rep.method = "udhcpc".into();
-        let script = env.run_dir.join(UDHCPC_SCRIPT_NAME);
-        write_file(&script, &udhcpc_script(&env.resolv_conf()), 0o755)?;
-        rep.files.push(script.clone());
-        let script_s = script.display().to_string();
+        rep.files.push(env.run_dir.join(UDHCPC_SCRIPT_NAME));
         for ifname in &rep.interfaces {
-            let pid = env.run_dir.join(format!("udhcpc.{ifname}.pid"));
-            let pid_s = pid.display().to_string();
-            let args = [
-                "udhcpc", "-i", ifname, "-s", &script_s, "-p", &pid_s, "-t", "3", "-T", "2", "-b",
-            ];
-            if let Err(e) = env.run_tool("busybox", &args) {
+            if let Err(e) = start_udhcpc(env, ifname) {
                 rep.notes.push(format!("{ifname}: {e}"));
             }
         }
     }
     Ok(rep)
+}
+
+fn udhcpc_pid_file(env: &NetEnv, ifname: &str) -> PathBuf {
+    env.run_dir.join(format!("udhcpc.{ifname}.pid"))
+}
+
+/// NET-1 fallback: (re)start busybox `udhcpc` in the background on `ifname`.
+pub fn start_udhcpc(env: &NetEnv, ifname: &str) -> io::Result<()> {
+    stop_udhcpc(env, ifname);
+    let script = env.run_dir.join(UDHCPC_SCRIPT_NAME);
+    write_file(&script, &udhcpc_script(&env.resolv_conf()), 0o755)?;
+    let script_s = script.display().to_string();
+    let pid_s = udhcpc_pid_file(env, ifname).display().to_string();
+    let args = [
+        "udhcpc", "-i", ifname, "-s", &script_s, "-p", &pid_s, "-t", "3", "-T", "2", "-b",
+    ];
+    env.run_tool("busybox", &args)
+        .map_err(|e| io::Error::other(e.to_string()))
+}
+
+/// Stop the `udhcpc` the app started on `ifname`, if any.
+pub fn stop_udhcpc(env: &NetEnv, ifname: &str) {
+    let pidf = udhcpc_pid_file(env, ifname);
+    let pid = fs::read_to_string(&pidf)
+        .ok()
+        .and_then(|t| t.trim().parse::<i32>().ok())
+        .filter(|p| *p > 1);
+    if let Some(pid) = pid {
+        if env.simulation {
+            log::info!("SIM: would stop udhcpc (pid {pid})");
+        } else {
+            // SAFETY: plain kill(2) on a pid read from our own pid file.
+            unsafe {
+                libc::kill(pid, libc::SIGTERM);
+            }
+            log::info!("NET-2: stopped udhcpc on {ifname} (pid {pid})");
+        }
+    }
+    let _ = fs::remove_file(pidf);
 }
 
 /// DNS servers from systemd-networkd lease files (`DNS=a b c`).

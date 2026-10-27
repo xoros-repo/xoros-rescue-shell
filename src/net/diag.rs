@@ -316,6 +316,19 @@ pub fn report_text(steps: &[Step]) -> String {
     t
 }
 
+/// Keep the last test report in the run directory for the diagnostics bundle (LOG-2).
+pub fn record(env: &NetEnv, steps: &[Step]) {
+    let p = env.run_dir.join(crate::constants::NET_TEST_REPORT_NAME);
+    let text = format!(
+        "Network test {}\n\n{}",
+        format_utc(std::time::SystemTime::now()),
+        report_text(steps)
+    );
+    if let Err(e) = super::config::write_file(&p, &text, 0o644) {
+        log::warn!("cannot save the network test report: {e}");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

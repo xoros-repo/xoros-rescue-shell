@@ -39,6 +39,10 @@ pub enum Command {
     Time(Vec<String>),
     /// `--cli test <args>` (TST-*).
     Test(Vec<String>),
+    /// `--cli report <args>` (SYS-5), `--cli diag <args>` (LOG-2), `--cli ssh <args>` (SSH-1).
+    Report(Vec<String>),
+    Diag(Vec<String>),
+    Ssh(Vec<String>),
     /// `--sim-init <dir>`: write an example simulation directory.
     SimInit(PathBuf),
     Help,
@@ -76,7 +80,7 @@ Usage:
   xoros-rescue-shell [--sim <dir>] --cli test disk [--device disk|<partition label>|<kernel name>]
   xoros-rescue-shell [--sim <dir>] --cli test fsck [overlay] [application] [--repair --confirm REPAIR]
   xoros-rescue-shell [--sim <dir>] --cli test results [--json]
-  xoros-rescue-shell --sim-init <dir>               create an example simulation dir
+{}  xoros-rescue-shell --sim-init <dir>               create an example simulation dir
   xoros-rescue-shell --help | --version
 
 Options:
@@ -97,7 +101,8 @@ Exit codes:
      cancelled
   2  the command line could not be parsed
   3  a test ran and found a problem (FAIL)
-"
+",
+        crate::cli_net::USAGE
     )
 }
 
@@ -156,16 +161,20 @@ where
             Some("update") => command = Command::Update(words.map(str::to_string).collect()),
             Some("net") => command = Command::Net(words.map(str::to_string).collect()),
             Some("time") => command = Command::Time(words.map(str::to_string).collect()),
+            Some("report") => command = Command::Report(words.map(str::to_string).collect()),
+            Some("diag") => command = Command::Diag(words.map(str::to_string).collect()),
+            Some("ssh") => command = Command::Ssh(words.map(str::to_string).collect()),
             Some("test") => command = Command::Test(words.map(str::to_string).collect()),
             Some(other) => {
                 return Err(format!(
                     "CLI command '{other}' is not implemented yet \
-                     (available: status, backup, update, net, time, test)."
+                     (available: status, backup, update, net, time, test, report, diag, ssh)."
                 ))
             }
             None => {
                 return Err(
-                    "--cli needs a command (status, backup, update, net, time, test).".into(),
+                    "--cli needs a command (status, backup, update, net, time, test, report, diag, ssh)."
+                        .into(),
                 )
             }
         }
@@ -591,6 +600,7 @@ fn net_cmd(app: &App, args: &[String]) -> Result<String, String> {
             let steps = net::diag::run(&env, &opts, &crate::tasks::CancelToken::new(), &mut |s| {
                 eprintln!("{}", net::diag::step_line(s))
             });
+            net::diag::record(&env, &steps);
             let failed = steps
                 .iter()
                 .any(|s| s.status == net::diag::StepStatus::Fail);
@@ -601,7 +611,11 @@ fn net_cmd(app: &App, args: &[String]) -> Result<String, String> {
                 Ok(text)
             }
         }
-        _ => Err("net needs: up | dns | test.".into()),
+        _ => crate::cli_net::net_cmd(app, args).unwrap_or_else(|| {
+            Err("net needs: up | dns | test | show | scan | config | unconfig | list | \
+                 remember | forget | export-nm | nm-list | import-nm."
+                .into())
+        }),
     }
 }
 
@@ -800,6 +814,19 @@ pub fn run_net(app: &App, args: &[String]) -> i32 {
 /// `--cli time ...`.
 pub fn run_time(app: &App, args: &[String]) -> i32 {
     print_result(time_cmd(app, args))
+}
+
+/// `--cli report ...`, `--cli diag ...`, `--cli ssh ...`.
+pub fn run_report(app: &App, args: &[String]) -> i32 {
+    print_result(crate::cli_net::report_cmd(app, args))
+}
+
+pub fn run_diag(app: &App, args: &[String]) -> i32 {
+    print_result(crate::cli_net::diag_cmd(app, args))
+}
+
+pub fn run_ssh(app: &App, args: &[String]) -> i32 {
+    print_result(crate::cli_net::ssh_cmd(app, args))
 }
 
 #[cfg(test)]
