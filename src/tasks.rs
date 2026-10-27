@@ -7,6 +7,7 @@
 
 use std::fmt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -253,6 +254,8 @@ struct RunnerInner {
 #[derive(Default)]
 pub struct TaskRunner {
     inner: Mutex<RunnerInner>,
+    /// Number of tasks that have finished (never decreases; the UI refreshes on changes).
+    finished: Arc<AtomicU64>,
 }
 
 /// Number of finished tasks kept in the list.
@@ -307,6 +310,7 @@ impl TaskRunner {
         };
         let thread_handle = handle.clone();
         let task_name = name.clone();
+        let finished = Arc::clone(&self.finished);
         std::thread::Builder::new()
             .name(format!("task-{}", handle.id))
             .spawn(move || {
@@ -329,6 +333,7 @@ impl TaskRunner {
                     s.state = state;
                     s.finished = Some(Instant::now());
                 }
+                finished.fetch_add(1, Ordering::SeqCst);
                 if let Some(cb) = on_finish {
                     cb(thread_handle.snapshot());
                 }
@@ -378,6 +383,11 @@ impl TaskRunner {
             .iter()
             .map(|t| t.snapshot())
             .collect()
+    }
+
+    /// Number of tasks finished so far in this session.
+    pub fn finished_count(&self) -> u64 {
+        self.finished.load(Ordering::SeqCst)
     }
 
     /// Request cancel of every running task.
@@ -529,6 +539,7 @@ mod tests {
             .expect("spawn");
         let state = rx.recv_timeout(Duration::from_secs(5)).expect("callback");
         assert_eq!(state, TaskState::Succeeded("x".into()));
+        assert_eq!(runner.finished_count(), 1);
     }
 
     #[test]

@@ -13,7 +13,7 @@ pub mod theme;
 pub mod tools;
 pub mod update;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use cursive::event::{Event, Key};
@@ -97,6 +97,9 @@ pub fn refresh_status(s: &mut Cursive) {
 }
 
 fn build_menubar(s: &mut Cursive) {
+    // Rebuilt on every Esc: cursive keeps the last focused menu otherwise, so the bar would
+    // reopen on the menu of the previous action instead of the first one.
+    s.menubar().clear();
     s.menubar()
         .add_subtree(texts::MENU_STATUS, status::menu())
         .add_subtree(texts::MENU_BOOT, boot::menu())
@@ -122,6 +125,32 @@ fn base_layer() -> impl View {
     )
 }
 
+/// What the ticker saw last: number of screen layers and finished tasks at the last refresh.
+static TICK_SEEN: Mutex<(usize, u64)> = Mutex::new((BASE_LAYERS, 0));
+
+/// Ticker callback: status line, and the Status screen when it becomes visible again after a
+/// dialog/screen was closed or when a task finished while it is visible. Actions change the
+/// state (update, boot settings, reset, tests), so the screen is never left stale.
+fn on_tick(s: &mut Cursive) {
+    update_status_line(s);
+    let Some(app) = app(s) else { return };
+    let layers = s.screen().len();
+    let finished = app.tasks.finished_count();
+    let refresh = {
+        let mut seen = crate::tasks::lock(&TICK_SEEN);
+        let on_base = layers <= BASE_LAYERS;
+        let refresh = on_base && (seen.0 > BASE_LAYERS || seen.1 != finished);
+        seen.0 = layers;
+        if on_base {
+            seen.1 = finished;
+        }
+        refresh
+    };
+    if refresh {
+        refresh_status(s);
+    }
+}
+
 /// Periodic redraw and status line update while the UI runs (progress bars, UI-3).
 fn start_ticker(s: &Cursive) {
     let sink = s.cb_sink().clone();
@@ -129,7 +158,7 @@ fn start_ticker(s: &Cursive) {
         .name("ui-ticker".into())
         .spawn(move || loop {
             std::thread::sleep(Duration::from_millis(300));
-            if sink.send(Box::new(update_status_line)).is_err() {
+            if sink.send(Box::new(on_tick)).is_err() {
                 break;
             }
         });
@@ -145,7 +174,10 @@ pub fn run(app: App) -> Result<(), String> {
     siv.add_fullscreen_layer(base_layer());
 
     // UI-2: Esc opens the menu; Ctrl-C does not exit.
-    siv.add_global_callback(Key::Esc, |s| s.select_menubar());
+    siv.add_global_callback(Key::Esc, |s| {
+        build_menubar(s);
+        s.select_menubar();
+    });
     siv.clear_global_callbacks(Event::CtrlChar('c'));
     siv.set_on_pre_event(Event::CtrlChar('c'), |s| {
         dialogs::info(s, APP_NAME, texts::CTRL_C_HINT);
