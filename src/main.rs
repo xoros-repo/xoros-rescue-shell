@@ -5,7 +5,7 @@ use std::process::ExitCode;
 use xoros_rescue_shell::app::{make_backend, sim_dir, App};
 use xoros_rescue_shell::backend::sim::SimBackend;
 use xoros_rescue_shell::cli::{
-    parse_args, run_backup, run_net, run_status, run_time, run_update, usage, Command,
+    parse_args, run_backup, run_net, run_status, run_test, run_time, run_update, usage, Command,
 };
 use xoros_rescue_shell::constants::{APP_NAME, APP_VERSION};
 use xoros_rescue_shell::{logging, terminal, ui};
@@ -45,7 +45,8 @@ fn main() -> ExitCode {
         | Command::Backup(_)
         | Command::Update(_)
         | Command::Net(_)
-        | Command::Time(_) => {}
+        | Command::Time(_)
+        | Command::Test(_) => {}
     }
 
     let backend = match make_backend(sim_dir(opts.sim)) {
@@ -71,6 +72,7 @@ fn main() -> ExitCode {
         Command::Update(args) => exit(run_update(&app, &args)),
         Command::Net(args) => exit(run_net(&app, &args)),
         Command::Time(args) => exit(run_time(&app, &args)),
+        Command::Test(args) => ExitCode::from(run_test(&app, &args).clamp(0, 255) as u8),
         _ => match ui::run(app) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {

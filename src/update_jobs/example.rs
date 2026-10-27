@@ -9,7 +9,7 @@ use std::path::Path;
 use xoros_core::env::BuildTimestamp;
 use xoros_core::hex;
 use xoros_core::manifest::{Chunk, Image, ImageType, Manifest, Target};
-use xoros_core::squashfs::{fake_superblock, SUPERBLOCK_SIZE};
+use xoros_core::squashfs::SUPERBLOCK_SIZE;
 
 /// `size` bytes: a squashfs superblock with `bytes_used = size`, then xorshift data.
 pub fn fake_image(size: usize, seed: u32) -> Vec<u8> {
@@ -23,7 +23,7 @@ pub fn fake_image(size: usize, seed: u32) -> Vec<u8> {
         })
         .collect();
     if size >= SUPERBLOCK_SIZE {
-        v[..SUPERBLOCK_SIZE].copy_from_slice(&fake_superblock(size as u64));
+        v[..SUPERBLOCK_SIZE].copy_from_slice(&crate::hwtest::slotcheck::example_superblock(size as u64));
     }
     v
 }

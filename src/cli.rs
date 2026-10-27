@@ -9,7 +9,9 @@ use std::sync::{Arc, Mutex};
 
 use crate::backend::Stick;
 use crate::backup::{ImportMode, PartitionRole};
+use crate::backend::{PartRole, Slot};
 use crate::backup_jobs;
+use crate::hwtest;
 use crate::constants::{DEFAULT_HTTP_PROXY, DEFAULT_OTA_BASE_URL, WRITE_BOTH_CONFIRM_WORD};
 use crate::net;
 use crate::slots::RescueCheck;
@@ -35,6 +37,8 @@ pub enum Command {
     Net(Vec<String>),
     /// `--cli time <args>` (NET-7).
     Time(Vec<String>),
+    /// `--cli test <args>` (TST-*).
+    Test(Vec<String>),
     /// `--sim-init <dir>`: write an example simulation directory.
     SimInit(PathBuf),
     Help,
@@ -66,6 +70,12 @@ Usage:
                      [--allow-downgrade] [--allow-unverified] [--no-resume] [--confirm WRITE]
   xoros-rescue-shell [--sim <dir>] --cli net up | dns | test [--base <url>] [--proxy <url>]
   xoros-rescue-shell [--sim <dir>] --cli time show | sync [<server>...] | set 'YYYY-MM-DD HH:MM[:SS]'
+  xoros-rescue-shell [--sim <dir>] --cli test slots [A|B] [--no-files] [--manifest auto|none] [<source>]
+  xoros-rescue-shell [--sim <dir>] --cli test rescue
+  xoros-rescue-shell [--sim <dir>] --cli test memory [--percent N] [--passes N]
+  xoros-rescue-shell [--sim <dir>] --cli test disk [--device disk|<partition label>|<kernel name>]
+  xoros-rescue-shell [--sim <dir>] --cli test fsck [overlay] [application] [--repair --confirm REPAIR]
+  xoros-rescue-shell [--sim <dir>] --cli test results [--json]
   xoros-rescue-shell --sim-init <dir>               create an example simulation dir
   xoros-rescue-shell --help | --version
 
@@ -78,11 +88,15 @@ Options:
 Update sources (default: the OTA server for the newest valid slot):
   --base <url> [--proxy <url>] [--version <v>] [--machine <m>] [--suffix <s>]
   --stick <id> --path <dir or image on the stick>   (see 'update scan')
+  (test slots: where to look for the OTA manifest of the slot's build; default: sticks,
+  then the OTA server)
 
 Exit codes:
-  0  success
-  1  error: the operation failed or completed only partly
+  0  success (a test passed, possibly with warnings)
+  1  error: the operation failed or completed only partly, a test could not run or was
+     cancelled
   2  the command line could not be parsed
+  3  a test ran and found a problem (FAIL)
 "
     )
 }
@@ -142,13 +156,18 @@ where
             Some("update") => command = Command::Update(words.map(str::to_string).collect()),
             Some("net") => command = Command::Net(words.map(str::to_string).collect()),
             Some("time") => command = Command::Time(words.map(str::to_string).collect()),
+            Some("test") => command = Command::Test(words.map(str::to_string).collect()),
             Some(other) => {
                 return Err(format!(
                     "CLI command '{other}' is not implemented yet \
-                     (available: status, backup, update, net, time)."
+                     (available: status, backup, update, net, time, test)."
                 ))
             }
-            None => return Err("--cli needs a command (status, backup, update, net, time).".into()),
+            None => {
+                return Err(
+                    "--cli needs a command (status, backup, update, net, time, test).".into(),
+                )
+            }
         }
     }
     Ok(Options { sim, command })
@@ -209,13 +228,23 @@ fn run_cli_job<T: Send + 'static>(
     name: &str,
     body: impl FnOnce(&TaskCtx) -> Result<T, TaskFailure> + Send + 'static,
 ) -> Result<T, String> {
+    run_cli_task(app, name, TaskKind::Write, body)
+}
+
+/// Run a job in a task of `kind`, printing progress to stderr.
+fn run_cli_task<T: Send + 'static>(
+    app: &App,
+    name: &str,
+    kind: TaskKind,
+    body: impl FnOnce(&TaskCtx) -> Result<T, TaskFailure> + Send + 'static,
+) -> Result<T, String> {
     let out: Arc<Mutex<Option<T>>> = Arc::new(Mutex::new(None));
     let o = Arc::clone(&out);
     let h = app
         .tasks
         .spawn(
             name,
-            TaskKind::Write,
+            kind,
             move |ctx| {
                 let v = body(ctx)?;
                 *lock(&o) = Some(v);
@@ -599,6 +628,151 @@ fn time_cmd(app: &App, args: &[String]) -> Result<String, String> {
     }
 }
 
+/// `--cli test ...` (TST-*): parse into a request.
+fn test_request(app: &App, args: &[String]) -> Result<Option<hwtest::TestRequest>, String> {
+    use hwtest::{fsck::FsckRequest, memtest, slotcheck, TestRequest};
+    let num = |name: &str| -> Result<Option<u32>, String> {
+        opt_value(args, name)
+            .map(|v| v.parse::<u32>().map_err(|_| format!("{name}: not a number: '{v}'.")))
+            .transpose()
+    };
+    // Words that are neither options nor option values.
+    let positional = |values: &[&str]| -> Vec<String> {
+        let mut out = Vec::new();
+        let mut skip = false;
+        for a in &args[1..] {
+            if skip {
+                skip = false;
+            } else if a.starts_with("--") {
+                skip = values.contains(&a.as_str());
+            } else {
+                out.push(a.clone());
+            }
+        }
+        out
+    };
+    Ok(Some(match args.first().map(String::as_str) {
+        Some("results") => return Ok(None),
+        Some("rescue") => TestRequest::Rescue,
+        Some("memory") => {
+            let percent = num("--percent")?.unwrap_or(u32::from(memtest::DEFAULT_PERCENT));
+            let passes = num("--passes")?.unwrap_or(1);
+            let (lo, hi) = memtest::PERCENT_RANGE.into_inner();
+            if !(u32::from(lo)..=u32::from(hi)).contains(&percent) {
+                return Err("--percent must be 1..95.".into());
+            }
+            if !memtest::PASSES_RANGE.contains(&passes) {
+                return Err("--passes must be 1..100.".into());
+            }
+            TestRequest::Memory(memtest::MemOptions {
+                percent: percent as u8,
+                passes,
+                max_bytes: None,
+            })
+        }
+        Some("disk") => TestRequest::Disk(match opt_value(args, "--device") {
+            Some(d) => hwtest::parse_disk_target(app.backend.as_ref(), &d)?,
+            None => None,
+        }),
+        Some("slots") => {
+            let mut slots = Vec::new();
+            for w in positional(&["--manifest", "--base", "--proxy", "--version", "--machine", "--suffix", "--stick", "--path"]) {
+                slots.push(w.parse::<Slot>().map_err(|e| e.to_string())?);
+            }
+            if slots.is_empty() {
+                slots = Slot::ALL.to_vec();
+            }
+            let manifest = match opt_value(args, "--manifest").as_deref() {
+                Some("none") => slotcheck::ManifestMode::Off,
+                Some("auto") | None
+                    if opt_value(args, "--base").is_none()
+                        && opt_value(args, "--stick").is_none() =>
+                {
+                    slotcheck::ManifestMode::Auto
+                }
+                Some("auto") | None => slotcheck::ManifestMode::Origin(origin_arg(app, args)?),
+                Some(other) => return Err(format!("--manifest: unknown value '{other}'.")),
+            };
+            TestRequest::Slots(slotcheck::SlotTestOptions {
+                slots,
+                read_files: !has_flag(args, "--no-files"),
+                manifest,
+            })
+        }
+        Some("fsck") => {
+            let mut roles = Vec::new();
+            for w in positional(&["--confirm"]) {
+                match PartRole::from_label(&w) {
+                    Some(r @ (PartRole::Overlay | PartRole::Application)) => roles.push(r),
+                    _ => return Err(format!("fsck: '{w}' is not overlay or application.")),
+                }
+            }
+            if roles.is_empty() {
+                roles = vec![PartRole::Overlay, PartRole::Application];
+            }
+            let repair = has_flag(args, "--repair");
+            let confirmation = opt_value(args, "--confirm").unwrap_or_default();
+            if repair && confirmation != crate::texts::FSCK_REPAIR_WORD {
+                return Err(format!(
+                    "A repair needs --confirm {} (UI-4).",
+                    crate::texts::FSCK_REPAIR_WORD
+                ));
+            }
+            TestRequest::Fsck(FsckRequest {
+                roles,
+                repair,
+                confirmation,
+            })
+        }
+        _ => {
+            return Err(
+                "test needs: slots | rescue | memory | disk | fsck | results.".into(),
+            )
+        }
+    }))
+}
+
+/// `--cli test ...`; prints the result and returns the exit code of its outcome (0 pass or
+/// warning, 3 fail, 1 error/cancelled).
+pub fn run_test(app: &App, args: &[String]) -> i32 {
+    let req = match test_request(app, args) {
+        Ok(Some(r)) => r,
+        Ok(None) => {
+            let store = &app.test_results;
+            if has_flag(args, "--json") {
+                return match serde_json::to_string_pretty(&store.all()) {
+                    Ok(s) => {
+                        println!("{s}");
+                        0
+                    }
+                    Err(e) => {
+                        eprintln!("error: {e}");
+                        1
+                    }
+                };
+            }
+            print!("{}", store.text());
+            return 0;
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 1;
+        }
+    };
+    let env = hwtest::TestEnv::of(app);
+    let (kind, title) = (req.task_kind(), req.kind().title());
+    match run_cli_task(app, title, kind, move |ctx| Ok(hwtest::run_request(&env, &req, ctx))) {
+        Ok(r) => {
+            print!("{}", r.text());
+            r.outcome.exit_code()
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            1
+        }
+    }
+}
+
 /// Print the result of a command; returns the process exit code.
 fn print_result(r: Result<String, String>) -> i32 {
     match r {
@@ -680,5 +854,80 @@ mod tests {
         );
         assert!(parse_args(["--cli", "status", "--bogus"]).is_err());
         assert!(parse_args(["--what"]).is_err());
+        assert_eq!(
+            parse_args(["--cli", "test", "memory", "--percent", "50"]).map(|o| o.command),
+            Ok(Command::Test(vec![
+                "memory".into(),
+                "--percent".into(),
+                "50".into()
+            ]))
+        );
+    }
+
+    #[test]
+    fn test_requests() {
+        use crate::hwtest::slotcheck::ManifestMode;
+        use crate::hwtest::TestRequest;
+        let d = crate::hw::testutil::TempDir::new("cli-test");
+        crate::backend::sim::SimBackend::create_example(d.path()).expect("example");
+        let app = App::new(
+            crate::app::make_backend(Some(d.path().to_path_buf())).expect("backend"),
+        );
+        let req = |words: &[&str]| {
+            let args: Vec<String> = words.iter().map(|w| w.to_string()).collect();
+            test_request(&app, &args)
+        };
+        assert_eq!(req(&["results"]), Ok(None));
+        assert_eq!(req(&["rescue"]), Ok(Some(TestRequest::Rescue)));
+        match req(&["memory", "--percent", "50", "--passes", "2"]) {
+            Ok(Some(TestRequest::Memory(o))) => assert_eq!((o.percent, o.passes), (50, 2)),
+            other => panic!("{other:?}"),
+        }
+        assert!(req(&["memory", "--percent", "96"]).is_err());
+        assert!(req(&["memory", "--passes", "x"]).is_err());
+        assert_eq!(req(&["disk"]), Ok(Some(TestRequest::Disk(None))));
+        assert_eq!(
+            req(&["disk", "--device", "application"]),
+            Ok(Some(TestRequest::Disk(Some(PartRole::Application))))
+        );
+        assert_eq!(
+            req(&["disk", "--device", "sda4"]),
+            Ok(Some(TestRequest::Disk(Some(PartRole::Rescue))))
+        );
+        assert_eq!(req(&["disk", "--device", "sda"]), Ok(Some(TestRequest::Disk(None))));
+        assert!(req(&["disk", "--device", "sdz"]).is_err());
+        match req(&["slots", "B", "--no-files", "--manifest", "none"]) {
+            Ok(Some(TestRequest::Slots(o))) => {
+                assert_eq!(o.slots, vec![Slot::B]);
+                assert!(!o.read_files);
+                assert_eq!(o.manifest, ManifestMode::Off);
+            }
+            other => panic!("{other:?}"),
+        }
+        match req(&["slots", "--stick", "usb1", "--path", "xoros/ota/1.0/qemux86-64/devel"]) {
+            Ok(Some(TestRequest::Slots(o))) => {
+                assert_eq!(o.slots, Slot::ALL.to_vec());
+                assert!(matches!(o.manifest, ManifestMode::Origin(_)));
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(req(&["slots", "C"]).is_err());
+        match req(&["fsck", "overlay"]) {
+            Ok(Some(TestRequest::Fsck(r))) => {
+                assert_eq!(r.roles, vec![PartRole::Overlay]);
+                assert!(!r.repair);
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(req(&["fsck", "--repair"]).is_err());
+        assert!(req(&["fsck", "rescue"]).is_err());
+        match req(&["fsck", "--repair", "--confirm", "REPAIR"]) {
+            Ok(Some(TestRequest::Fsck(r))) => {
+                assert_eq!(r.roles.len(), 2);
+                assert!(r.repair);
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(req(&["bogus"]).is_err());
     }
 }

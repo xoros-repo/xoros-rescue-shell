@@ -8,6 +8,8 @@
 //! `<dir>/rootfs_a.img` / `rootfs_b.img` through `PartitionWriter::for_file` (created sparse
 //! with the partition size when missing).
 //! Image hashing reads `<dir>/<label>.img` (or the file named in `images`) completely.
+//! Hardware tests (TST-*): the slot file read uses `<dir>/slotfs/<label>/`, the disk read test
+//! reads `<dir>/disk.img` (or the rescue image) or a partition's image file.
 //! External sticks are directories `<dir>/sticks/<name>/`, the persistent partitions are
 //! directories `<dir>/parts/overlay/` and `<dir>/parts/application/`; "mounting" them only
 //! returns the directory, and external tools (`e2fsck`) are logged, not run.
@@ -273,9 +275,24 @@ impl SimBackend {
             info.rescue_image_sha256 = Some(sha.clone());
         }
         b.store(&state)?;
+        write_example_slots(dir)
+            .map_err(|e| BackendError::io(format!("Cannot write the slot images in {}", dir.display()), e))?;
         write_example_updates(dir, &data[..image_len as usize])
             .map_err(|e| BackendError::io(format!("Cannot write the example OTA tree in {}", dir.display()), e))
     }
+}
+
+/// Slot images `rootfs_a.img` / `rootfs_b.img`: sparse files of the partition size (1 GiB)
+/// with a 2 MiB example squashfs at the start (TST-4 superblock check, hashing).
+fn write_example_slots(dir: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::FileExt;
+    for (i, label) in ["rootfs_a", "rootfs_b"].iter().enumerate() {
+        let image = crate::update_jobs::example::fake_image(2 * MIB as usize, 100 + i as u32);
+        let f = fs::File::create(dir.join(format!("{label}.img")))?;
+        f.set_len(1024 * MIB)?;
+        f.write_all_at(&image, 0)?;
+    }
+    Ok(())
 }
 
 /// Build timestamp of the example update (newer than both example slots).
@@ -343,6 +360,12 @@ fn write_example_partitions(dir: &Path) -> std::io::Result<()> {
             fs::create_dir_all(parent)?;
         }
         fs::write(p, content)?;
+    }
+    for slot in ["rootfs_a", "rootfs_b"] {
+        let root = dir.join("slotfs").join(slot);
+        fs::create_dir_all(root.join("usr/bin"))?;
+        fs::write(root.join("xoros.env"), "DISTRO=xoros\nVERSION=1.0\n")?;
+        fs::write(root.join("usr/bin/app"), vec![0x7fu8; 256 * 1024])?;
     }
     fs::create_dir_all(dir.join("parts/overlay/overlays/etc/work"))?;
     fs::create_dir_all(dir.join("parts/overlay/lost+found"))?;
@@ -674,6 +697,54 @@ impl SystemBackend for SimBackend {
         let path = self.slot_image(&s, slot);
         fs::File::open(&path)
             .map_err(|e| BackendError::io(format!("Cannot open {}", path.display()), e))
+    }
+
+    fn mount_slot(&self, slot: Slot) -> Result<MountGuard> {
+        let s = self.load()?;
+        Self::check_fail(&s, &format!("mount_slot.{}", slot.letter()))?;
+        let dir = self.dir.join("slotfs").join(slot.label());
+        if !dir.is_dir() {
+            return Err(BackendError::new(
+                ErrorKind::NotAvailable,
+                format!(
+                    "Simulation: no file tree for slot {} ({}).",
+                    slot.letter(),
+                    dir.display()
+                ),
+            ));
+        }
+        Ok(MountGuard::directory(dir))
+    }
+
+    fn read_test_path(&self, role: Option<PartRole>) -> Result<PathBuf> {
+        let s = self.load()?;
+        Self::check_fail(&s, "read_test_path")?;
+        let path = match role {
+            Some(r) => self.image_path(&s, r),
+            None => {
+                let disk = self.dir.join(s.images.get("disk").map_or("disk.img", String::as_str));
+                if disk.exists() {
+                    disk
+                } else {
+                    self.image_path(&s, PartRole::Rescue)
+                }
+            }
+        };
+        if !path.is_file() {
+            return Err(BackendError::new(
+                ErrorKind::NotAvailable,
+                format!("Simulation: no image file {}.", path.display()),
+            ));
+        }
+        Ok(path)
+    }
+
+    fn release_partition(&self, role: PartRole) -> Result<()> {
+        check_persistent(role)?;
+        let s = self.load()?;
+        Self::check_fail(&s, &format!("release_partition.{}", role.label()))?;
+        log::info!("SIM: {} is not mounted", role.label());
+        Ok(())
     }
 
     fn slot_written(&self, slot: Slot, info: &BuildInfo) -> Result<()> {

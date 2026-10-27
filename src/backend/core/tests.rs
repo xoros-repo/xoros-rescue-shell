@@ -420,6 +420,33 @@ fn stick_file_system_is_probed() {
         .any(|s| s.id == "sdc1"));
 }
 
+/// TST-3/TST-4/TST-6 helpers of the device backend.
+#[test]
+fn test_helpers() {
+    let mut f = rescue_fixture();
+    let b = f.backend();
+    assert_eq!(b.read_test_path(None).ok(), Some(f.paths.dev.join("sda")));
+    assert_eq!(
+        b.read_test_path(Some(PartRole::Application)).ok(),
+        Some(f.paths.dev.join("sda6"))
+    );
+    // slot A is mounted in the fixture: the existing mount is used
+    let g = b.mount_slot(Slot::A).expect("slot A");
+    assert_eq!(g.path(), f.root.join("run/xoros-rescue/mnt/rootfs_a"));
+    g.unmount().expect("existing mount is left alone");
+    // not mounted: nothing to release
+    b.release_partition(PartRole::Overlay).expect("free");
+    assert!(b.release_partition(PartRole::Rescue).is_err());
+    // mounted outside the rescue shell's mount directory: refused with a hint
+    f.mount(61, 8, 6, "/opt", "ext4", "/dev/sda6", "rw");
+    let b = f.backend();
+    let e = b
+        .release_partition(PartRole::Application)
+        .expect_err("mounted");
+    assert!(e.message.contains("mounted at /opt"), "{e}");
+    assert!(e.message.contains("umount /opt"), "{e}");
+}
+
 #[test]
 fn persistent_partitions() {
     let mut f = rescue_fixture();

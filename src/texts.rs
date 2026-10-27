@@ -94,3 +94,38 @@ its slot. Data on the application partition is kept.";
 pub const FULL_RESET_EXPLANATION: &str = "Deletes all changes to /etc of the normal system \
 (overlay partition) AND all data on the application partition (/opt: apps, Docker data, \
 user data).";
+
+// --- Tests menu (TST-*) ---
+
+pub const TITLE_TEST_RESULTS: &str = "Test results";
+pub const TITLE_MEMTEST: &str = "Memory test";
+pub const TITLE_DISKTEST: &str = "Disk read test";
+pub const TITLE_SLOTTEST: &str = "Slot integrity";
+pub const TITLE_RESCUETEST: &str = "Rescue integrity";
+pub const TITLE_FSCK: &str = "File system check";
+pub const BTN_START: &str = "Start";
+pub const BTN_REPAIR: &str = "Repair...";
+
+pub const MEMTEST_NOTE: &str = "Note: a userspace memory test cannot test the memory used by \
+the kernel and by the rescue shell itself. For a complete test use memtest86+ if the device \
+offers it.";
+
+pub const MEMTEST_INTRO: &str = "Allocates and locks a share of the free memory and runs \
+solid, checkerboard, walking ones/zeros, address, random and bit-flip patterns. One pass \
+takes a few minutes per GiB.";
+
+pub const DISKTEST_INTRO: &str = "Reads the selected area sequentially (O_DIRECT, 1 MiB \
+blocks) and reports read errors, slow blocks and the throughput. Nothing is written.";
+
+pub const SLOTTEST_INTRO: &str = "Checks the squashfs superblock of each slot, mounts it \
+read-only and reads every file, and compares the SHA-256 with the OTA manifest of the \
+slot's build when one is found on a stick or the OTA server.";
+
+pub const FSCK_INTRO: &str = "Runs e2fsck -f -n (check only, nothing is changed) on the \
+selected persistent partitions. They are unmounted first if the rescue shell mounted them.";
+
+pub const FSCK_REPAIR_CONFIRM: &str = "Run e2fsck -f -y on the partitions with errors? \
+e2fsck answers yes to every question: damaged files may be moved to lost+found or deleted. \
+Consider exporting a backup first (Backup -> Export).";
+
+pub const FSCK_REPAIR_WORD: &str = "REPAIR";

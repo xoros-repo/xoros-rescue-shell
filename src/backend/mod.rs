@@ -681,6 +681,30 @@ pub trait SystemBackend: Send + Sync {
     /// Open a slot partition for reading (source of the A+B copy, OTA-5).
     fn open_slot_reader(&self, slot: Slot) -> Result<std::fs::File>;
 
+    // --- hardware tests (TST-*) ---
+
+    /// Mount a slot's squashfs read-only to read every file (TST-4); an existing mount (the
+    /// running system) is reused. The simulation uses `<dir>/slotfs/<label>/` if present.
+    fn mount_slot(&self, slot: Slot) -> Result<MountGuard> {
+        Err(BackendError::not_available(&format!(
+            "Mounting slot {}",
+            slot.letter()
+        )))
+    }
+
+    /// What the disk read test reads (TST-3): the boot disk (`None`) or one of its partitions.
+    /// A device node, or an image file in simulation mode.
+    fn read_test_path(&self, _role: Option<PartRole>) -> Result<PathBuf> {
+        Err(BackendError::not_available("The disk read test"))
+    }
+
+    /// Make a persistent partition available for exclusive use by `e2fsck` (TST-6): unmount
+    /// the rescue shell's own mounts of it (below the mount directory); fail if it is mounted
+    /// elsewhere or held by another device.
+    fn release_partition(&self, _role: PartRole) -> Result<()> {
+        Err(BackendError::not_available("The file system check"))
+    }
+
     /// Called after a slot was written and verified, with the build info from the manifest.
     /// The simulation records it as the slot's `xoros.env` (its images are not real
     /// squashfs); real backends read `/xoros.env` from the slot itself, so the default does

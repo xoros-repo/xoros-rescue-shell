@@ -9,8 +9,9 @@
 //! | `block_devices`, `boot_disk`, `layout` | `device::list_block_devices`, `device::boot_disk`, `device::Layout::of` |
 //! | `hash_image` | `device::hash_device` (squashfs image length) on the partition node |
 //! | `external_sticks`, `mount_stick` | `device::external_disks`, `Volume::mount_request` (file system probed first) |
-//! | `mount_partition` | `device::mount::MountRequest` (reuses existing mounts) |
+//! | `mount_partition`, `mount_slot` | `device::mount::MountRequest` (reuses existing mounts) |
 //! | `partition_usage` | `statvfs` of an existing mount, else `ext4::Superblock` + metadata overhead |
+//! | `release_partition` | `device::mount_points`, `device::holders`, `mount::umount` |
 //! | `boot_partition` | `BootPartition::from_layout` |
 //! | `open_slot_writer`, `open_slot_reader` | `device::PartitionWriter::open`, `device::Layout::open_read` |
 //!
@@ -576,6 +577,53 @@ impl SystemBackend for CoreBackend {
                 .fs_type(FsType::Ext4)
                 .writable(writable),
         )
+    }
+
+    fn mount_slot(&self, slot: Slot) -> Result<MountGuard> {
+        let layout = self.core_layout()?;
+        let part = layout.partition(PartRole::slot(slot).into());
+        let target = self.paths.mount_dir.join(slot.label());
+        self.mount_request(
+            mount::MountRequest::new(&part.node, part.dev, target).fs_type(FsType::Squashfs),
+        )
+    }
+
+    fn read_test_path(&self, role: Option<PartRole>) -> Result<PathBuf> {
+        let layout = self.core_layout()?;
+        Ok(match role {
+            Some(r) => layout.node(r.into()).to_path_buf(),
+            None => layout.disk.node.clone(),
+        })
+    }
+
+    fn release_partition(&self, role: PartRole) -> Result<()> {
+        check_persistent(role)?;
+        let layout = self.core_layout()?;
+        let part = layout.partition(role.into());
+        for m in cdev::mount_points(&self.paths, part.dev).map_err(core_err)? {
+            let host = self.paths.host_path(&m);
+            if !host.starts_with(&self.paths.mount_dir) {
+                return Err(BackendError::new(
+                    ErrorKind::Io,
+                    format!(
+                        "{} is mounted at {}. Unmount it first (Tools -> Subshell: umount {}).",
+                        part.node.display(),
+                        m.display(),
+                        m.display()
+                    ),
+                ));
+            }
+            mount::umount(&host).map_err(core_err)?;
+            log::info!("unmounted {} from {}", part.node.display(), host.display());
+        }
+        let holders = cdev::holders(&self.paths, part.dev);
+        if !holders.is_empty() {
+            return Err(BackendError::new(
+                ErrorKind::Io,
+                format!("{} is in use by {}.", part.node.display(), holders.join(", ")),
+            ));
+        }
+        Ok(())
     }
 
     fn command_runner(&self) -> Box<dyn CommandRunner> {

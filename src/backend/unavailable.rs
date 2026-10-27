@@ -131,4 +131,16 @@ impl SystemBackend for UnavailableBackend {
     fn open_slot_reader(&self, _slot: Slot) -> Result<std::fs::File> {
         self.na()
     }
+
+    fn mount_slot(&self, _slot: Slot) -> Result<MountGuard> {
+        self.na()
+    }
+
+    fn read_test_path(&self, _role: Option<PartRole>) -> Result<PathBuf> {
+        self.na()
+    }
+
+    fn release_partition(&self, _role: PartRole) -> Result<()> {
+        self.na()
+    }
 }

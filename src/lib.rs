@@ -10,6 +10,7 @@ pub mod clock;
 pub mod cmd;
 pub mod constants;
 pub mod hw;
+pub mod hwtest;
 pub mod logging;
 pub mod logs;
 pub mod net;

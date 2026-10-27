@@ -8,6 +8,7 @@ use crate::backend::sim::SimBackend;
 use crate::backend::unavailable::UnavailableBackend;
 use crate::backend::{BackendError, SystemBackend};
 use crate::constants::SIM_ENV_VAR;
+use crate::hwtest::ResultStore;
 use crate::slots::{start_rescue_check, RescueCheck};
 use crate::status::{collect_status, Reason, SystemStatus};
 use crate::tasks::{lock, OnFinish, SpawnError, TaskHandle, TaskRunner};
@@ -16,6 +17,8 @@ pub struct App {
     pub backend: Arc<dyn SystemBackend>,
     pub tasks: TaskRunner,
     pub rescue_check: Arc<Mutex<RescueCheck>>,
+    /// Hardware test results of this boot (TST-*).
+    pub test_results: Arc<ResultStore>,
     /// Why rescue was entered, captured the first time the boot state was readable, so
     /// later counter changes in this session do not change the answer (SYS-1).
     boot_reason: Mutex<Option<Reason>>,
@@ -52,6 +55,7 @@ pub fn make_backend(sim: Option<PathBuf>) -> Result<Arc<dyn SystemBackend>, Back
 impl App {
     pub fn new(backend: Arc<dyn SystemBackend>) -> App {
         App {
+            test_results: Arc::new(ResultStore::new(&backend.run_dir())),
             backend,
             tasks: TaskRunner::new(),
             rescue_check: Arc::new(Mutex::new(RescueCheck::NotChecked)),
