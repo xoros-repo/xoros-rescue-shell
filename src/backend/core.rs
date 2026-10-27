@@ -7,8 +7,10 @@
 //! | `current_boot` | `boot::current_boot` (`/proc/cmdline`) |
 //! | `slot_info` | `device::slot_info` |
 //! | `block_devices`, `boot_disk`, `layout` | `device::list_block_devices`, `device::boot_disk`, `device::Layout::of` |
-//! | `hash_image` | `squashfs::Superblock::image_len` on the partition node |
-//! | `mount_stick`, `mount_partition` | `device::mount::TempMount` (+ `mountinfo` for existing mounts) |
+//! | `hash_image` | `device::hash_device` (squashfs image length) on the partition node |
+//! | `external_sticks`, `mount_stick` | `device::external_disks`, `Volume::mount_request` (file system probed first) |
+//! | `mount_partition` | `device::mount::MountRequest` (reuses existing mounts) |
+//! | `partition_usage` | `statvfs` of an existing mount, else `ext4::Superblock` + metadata overhead |
 //! | `boot_partition` | `BootPartition::from_layout` |
 //! | `open_slot_writer`, `open_slot_reader` | `device::PartitionWriter::open`, `device::Layout::open_read` |
 //!
@@ -22,6 +24,7 @@ use std::path::{Path, PathBuf};
 
 use xoros_core::boot::{self as cboot, BootPartition};
 use xoros_core::device::{self as cdev, mount, Layout as CoreLayout, PartitionWriter};
+use xoros_core::fsprobe::FsType;
 use xoros_core::mountinfo::{self, MountInfo};
 use xoros_core::SystemPaths;
 
@@ -31,7 +34,7 @@ use super::{
     RescueReason, RescueSystemInfo, Result, Slot, Stick, SystemBackend,
 };
 use crate::backup::tools::{CommandRunner, SystemRunner};
-use crate::constants::{MOUNT_DIR, OS_RELEASE, RUN_DIR, STICK_MOUNT_SUBDIR};
+use crate::constants::{MOUNT_DIR, OS_RELEASE, RUN_DIR};
 use crate::hw::HostPaths;
 use crate::tasks::{format_bytes, CancelToken};
 
@@ -122,59 +125,47 @@ impl CoreBackend {
             .cloned())
     }
 
-    /// Mount `node` at `target`, or reuse an existing mount of `dev` (USB-1, BAK-*).
-    fn mount_fs(
-        &self,
-        node: &Path,
-        dev: cdev::DevNum,
-        target: &Path,
-        fs_types: &[&str],
-        writable: bool,
-    ) -> Result<MountGuard> {
-        if let Some(m) = self.existing_mount(dev)? {
-            if writable && m.is_read_only() {
-                return Err(BackendError::new(
-                    ErrorKind::Io,
-                    format!(
-                        "{} is mounted read-only at {}.",
-                        node.display(),
-                        m.mount_point.display()
-                    ),
-                ));
-            }
-            log::info!(
-                "{} already mounted at {}",
-                node.display(),
-                m.mount_point.display()
-            );
-            return Ok(MountGuard::directory(self.paths.host_path(&m.mount_point)));
+    /// Mount through the crate (USB-1, BAK-*): an existing mount of the device is reused, else
+    /// it is mounted at the request's target with the given or probed file system type.
+    fn mount_request(&self, req: mount::MountRequest) -> Result<MountGuard> {
+        let g = req.mount(&self.paths).map_err(core_err)?;
+        if g.is_temporary() {
+            log::info!("mounted {} at {} ({})", req.node().display(), g.path().display(), g.fs_type());
+        } else {
+            log::info!("{} already mounted at {}", req.node().display(), g.path().display());
         }
-        let opts = mount::MountOptions {
-            read_only: !writable,
-            ..mount::MountOptions::default()
-        };
-        let mut last = None;
-        for t in fs_types {
-            match mount::TempMount::new(node, target, t, &opts) {
-                Ok(g) => {
-                    return Ok(MountGuard::with_release(
-                        target.to_path_buf(),
-                        Box::new(TempRelease(g)),
-                    ))
+        Ok(MountGuard::with_release(
+            g.path().to_path_buf(),
+            Box::new(CoreRelease(g)),
+        ))
+    }
+
+    /// External volumes with a file system a stick may carry, with the disk's model.
+    fn stick_volumes(&self) -> Result<Vec<(cdev::Volume, String)>> {
+        let mut out = Vec::new();
+        for d in cdev::external_disks(&self.paths).map_err(core_err)? {
+            if is_virtual_disk(&d.disk.name) {
+                continue;
+            }
+            let model = d
+                .disk
+                .model
+                .clone()
+                .unwrap_or_else(|| d.disk.transport.to_string());
+            for v in d.volumes {
+                if STICK_FS.contains(&v.fs_type.as_str()) {
+                    out.push((v, model.clone()));
                 }
-                Err(e) => last = Some(e),
             }
         }
-        Err(last
-            .map(core_err)
-            .unwrap_or_else(|| BackendError::new(ErrorKind::Other, "No file system type.")))
+        Ok(out)
     }
 }
 
-/// Unmounts a `TempMount` through the [`MountGuard`].
-struct TempRelease(mount::TempMount);
+/// Unmounts the crate's mount guard through the app's [`MountGuard`].
+struct CoreRelease(mount::MountGuard);
 
-impl Release for TempRelease {
+impl Release for CoreRelease {
     fn release(self: Box<Self>) -> Result<()> {
         self.0.unmount().map_err(core_err)
     }
@@ -260,39 +251,104 @@ fn block_device_from_core(
     }
 }
 
-/// Used/total space from an ext4 superblock (offset 1024), without mounting.
-/// `None` if the data is not ext2/3/4.
+/// Used/total space of an unmounted ext2/3/4 file system as `df` shows it (statfs semantics,
+/// like the kernel's `ext4_statfs`): the total leaves out the file system's own metadata
+/// (superblock copies, group descriptors, bitmaps, inode tables, journal) and
+/// used = total - free, where free includes the blocks reserved for root. A fresh file system
+/// therefore shows almost nothing used. `None` if the data is not ext2/3/4.
 pub fn ext4_usage(mut r: impl Read + Seek) -> std::io::Result<Option<FsUsage>> {
-    let mut sb = [0u8; 1024];
-    r.seek(SeekFrom::Start(1024))?;
-    if r.read_exact(&mut sb).is_err() {
+    let mut raw = [0u8; xoros_core::ext4::SUPERBLOCK_SIZE];
+    r.seek(SeekFrom::Start(xoros_core::ext4::SUPERBLOCK_OFFSET))?;
+    if r.read_exact(&mut raw).is_err() {
         return Ok(None);
     }
-    let u16_at = |o: usize| u16::from_le_bytes([sb[o], sb[o + 1]]);
-    let u32_at = |o: usize| u32::from_le_bytes([sb[o], sb[o + 1], sb[o + 2], sb[o + 3]]);
-    if u16_at(56) != 0xEF53 {
+    let Ok(sb) = xoros_core::ext4::Superblock::parse(&raw) else {
         return Ok(None);
-    }
-    let log_bs = u32_at(24);
-    if log_bs > 6 {
-        return Ok(None);
-    }
-    let bs = 1024u64 << log_bs;
-    let is64 = u32_at(96) & 0x80 != 0;
-    let (blocks, free) = if is64 {
-        (
-            u64::from(u32_at(4)) | (u64::from(u32_at(0x150)) << 32),
-            u64::from(u32_at(12)) | (u64::from(u32_at(0x158)) << 32),
-        )
-    } else {
-        (u64::from(u32_at(4)), u64::from(u32_at(12)))
     };
-    let total = blocks.saturating_mul(bs);
-    let free = free.saturating_mul(bs).min(total);
+    let total = sb
+        .blocks_count
+        .saturating_sub(ext4_overhead_blocks(&raw, &sb));
+    let used = total.saturating_sub(sb.free_blocks);
     Ok(Some(FsUsage {
-        total,
-        used: total - free,
+        total: total.saturating_mul(sb.block_size),
+        used: used.saturating_mul(sb.block_size),
     }))
+}
+
+/// Blocks used by ext4 metadata: `s_overhead_clusters` when mke2fs recorded it (e2fsprogs
+/// 1.47+), else computed like the kernel's `ext4_calculate_overhead`.
+fn ext4_overhead_blocks(d: &[u8], sb: &xoros_core::ext4::Superblock) -> u64 {
+    let le16 = |o: usize| u64::from(u16::from_le_bytes([d[o], d[o + 1]]));
+    let le32 = |o: usize| u64::from(u32::from_le_bytes([d[o], d[o + 1], d[o + 2], d[o + 3]]));
+    // bigalloc: the counters are in clusters of 2^(log_cluster - log_block) blocks.
+    let cluster_ratio = if sb.feature_ro_compat & 0x0200 != 0 {
+        1u64 << le32(0x1c).saturating_sub(le32(0x18)).min(30)
+    } else {
+        1
+    };
+    let recorded = le32(0x248);
+    if recorded > 0 {
+        return recorded.saturating_mul(cluster_ratio);
+    }
+    let bs = sb.block_size;
+    let first_data = le32(0x14);
+    let per_group = le32(0x20);
+    let inodes_per_group = le32(0x28);
+    if per_group == 0 || cluster_ratio != 1 {
+        return 0;
+    }
+    let groups = sb.blocks_count.saturating_sub(first_data).div_ceil(per_group);
+    if groups > 1 << 24 {
+        return 0; // implausible: do not loop forever over a damaged superblock
+    }
+    let is64 = sb.feature_incompat & xoros_core::ext4::INCOMPAT_64BIT != 0;
+    let desc_size = if is64 { le16(0xfe).max(64) } else { 32 };
+    let desc_per_block = (bs / desc_size).max(1);
+    let gdb_count = groups.div_ceil(desc_per_block);
+    let reserved_gdt = le16(0xce);
+    let meta_bg = sb.feature_incompat & 0x0010 != 0;
+    let first_meta_bg = le32(0x104);
+    let sparse_super = sb.feature_ro_compat & 0x0001 != 0;
+    let sparse_super2 = sb.feature_compat & 0x0200 != 0;
+    let backup_bgs = [le32(0x24c), le32(0x250)];
+    let inode_size = if le32(0x4c) == 0 { 128 } else { le16(0x58) };
+    let inode_table = (inodes_per_group * inode_size).div_ceil(bs);
+    let is_power = |mut n: u64, base: u64| {
+        while n > 1 && n % base == 0 {
+            n /= base;
+        }
+        n == 1
+    };
+    let has_super = |g: u64| {
+        if g == 0 {
+            true
+        } else if sparse_super2 {
+            backup_bgs.contains(&g)
+        } else if g <= 1 || !sparse_super {
+            true
+        } else {
+            g % 2 == 1 && (is_power(g, 3) || is_power(g, 5) || is_power(g, 7))
+        }
+    };
+    let mut overhead = first_data;
+    for g in 0..groups {
+        let sup = u64::from(has_super(g));
+        if !meta_bg || g < first_meta_bg * desc_per_block {
+            if sup == 1 {
+                overhead += 1 + if meta_bg { first_meta_bg } else { gdb_count } + reserved_gdt;
+            }
+        } else {
+            let first = g / desc_per_block * desc_per_block;
+            let gdt = g == first || g == first + 1 || g == first + desc_per_block - 1;
+            overhead += sup + u64::from(gdt);
+        }
+        overhead += 2 + inode_table; // block and inode bitmap, inode table
+    }
+    // Internal journal: its size is backed up in s_jnl_blocks (i_size_high, i_size).
+    if sb.has_journal() && le32(0xe0) != 0 && d[0xfd] == 1 {
+        overhead += (le32(0x14c) | le32(0x148) << 32) / bs;
+    }
+    overhead
 }
 
 /// `statvfs` of a mounted file system.
@@ -470,83 +526,44 @@ impl SystemBackend for CoreBackend {
         cancel: &CancelToken,
     ) -> Result<String> {
         let layout = self.core_layout()?;
-        let node = layout.node(role.into());
-        let f = fs::File::open(node)
-            .map_err(|e| BackendError::io(format!("Cannot open {}", node.display()), e))?;
-        super::hash_squashfs(f, &node.display().to_string(), progress, cancel, None)
+        super::hash_squashfs(layout.node(role.into()), progress, cancel, None)
     }
 
     fn external_sticks(&self) -> Result<Vec<Stick>> {
-        let boot = cdev::boot_disk(&self.paths).map_err(core_err)?;
-        let disks = cdev::list_block_devices(&self.paths).map_err(core_err)?;
-        let mut out = Vec::new();
-        for d in disks
-            .iter()
-            .filter(|d| d.name != boot.name && !is_virtual_disk(&d.name) && d.size > 0)
-        {
-            let model = d.model.clone().unwrap_or_else(|| d.transport.to_string());
-            if d.partitions.is_empty() {
-                // A file system on the whole device: its type is not known to the crate.
-                out.push(Stick {
-                    id: d.name.clone(),
-                    description: format!("{}  {model}  {}", d.name, format_bytes(d.size)),
-                    device: Some(d.node.display().to_string()),
-                    fs_type: None,
-                    size: d.size,
-                });
-                continue;
-            }
-            for p in &d.partitions {
-                if let Some(t) = &p.fs_type {
-                    if !STICK_FS.contains(&t.as_str()) {
-                        continue;
-                    }
-                }
-                out.push(Stick {
-                    id: p.name.clone(),
-                    description: format!(
-                        "{}  {model}  {}  {}",
-                        p.name,
-                        format_bytes(p.size),
-                        p.fs_type.as_deref().unwrap_or("unknown fs")
-                    ),
-                    device: Some(p.node.display().to_string()),
-                    fs_type: p.fs_type.clone(),
-                    size: p.size,
-                });
-            }
-        }
-        Ok(out)
+        Ok(self
+            .stick_volumes()?
+            .into_iter()
+            .map(|(v, model)| Stick {
+                id: v.name.clone(),
+                description: format!(
+                    "{}  {model}  {}  {}{}",
+                    v.name,
+                    format_bytes(v.size),
+                    v.fs_type,
+                    v.label.as_deref().map(|l| format!("  {l}")).unwrap_or_default()
+                ),
+                device: Some(v.node.display().to_string()),
+                fs_type: Some(v.fs_type.as_str().to_string()),
+                size: v.size,
+            })
+            .collect())
     }
 
     fn mount_stick(&self, stick: &Stick, writable: bool) -> Result<MountGuard> {
-        // Look the stick up again: it must still exist and must not be on the boot disk.
-        let current = self.external_sticks()?;
-        let st = current.iter().find(|s| s.id == stick.id).ok_or_else(|| {
-            BackendError::new(
-                ErrorKind::Io,
-                format!("Stick {} is no longer present.", stick.id),
-            )
-        })?;
-        let disks = cdev::list_block_devices(&self.paths).map_err(core_err)?;
-        let (node, dev) = disks
-            .iter()
-            .flat_map(|d| {
-                std::iter::once((d.name.as_str(), d.node.clone(), d.dev)).chain(
-                    d.partitions
-                        .iter()
-                        .map(|p| (p.name.as_str(), p.node.clone(), p.dev)),
+        // Look the stick up again: it must still exist and must not be on the boot disk. The
+        // file system type was probed from the superblock, so only that driver is tried (no
+        // vfat attempt on an ext4 stick, USB-1).
+        let (v, _) = self
+            .stick_volumes()?
+            .into_iter()
+            .find(|(v, _)| v.name == stick.id)
+            .ok_or_else(|| {
+                BackendError::new(
+                    ErrorKind::Io,
+                    format!("Stick {} is no longer present.", stick.id),
                 )
-            })
-            .find(|(n, _, _)| *n == st.id)
-            .map(|(_, node, dev)| (node, dev))
-            .ok_or_else(|| BackendError::new(ErrorKind::Io, format!("{} not found.", st.id)))?;
-        let target = self.paths.mount_dir.join(STICK_MOUNT_SUBDIR).join(&st.id);
-        let types: Vec<&str> = match st.fs_type.as_deref() {
-            Some(t) => vec![t],
-            None => vec!["vfat", "exfat", "ext4"],
-        };
-        self.mount_fs(&node, dev, &target, &types, writable)
+            })?;
+        self.mount_request(v.mount_request(&self.paths, writable))
     }
 
     fn mount_partition(&self, role: PartRole, writable: bool) -> Result<MountGuard> {
@@ -554,7 +571,11 @@ impl SystemBackend for CoreBackend {
         let layout = self.core_layout()?;
         let part = layout.partition(role.into());
         let target = self.paths.mount_dir.join(role.label());
-        self.mount_fs(&part.node, part.dev, &target, &["ext4"], writable)
+        self.mount_request(
+            mount::MountRequest::new(&part.node, part.dev, target)
+                .fs_type(FsType::Ext4)
+                .writable(writable),
+        )
     }
 
     fn command_runner(&self) -> Box<dyn CommandRunner> {

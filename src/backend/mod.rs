@@ -542,59 +542,33 @@ impl fmt::Debug for MountGuard {
 /// Progress callback for long operations: `(bytes_done, bytes_total)`.
 pub type ProgressFn<'a> = &'a mut dyn FnMut(u64, u64);
 
-/// SHA-256 (hex) of the squashfs image at the start of `file`: the first
+/// SHA-256 (hex) of the squashfs image in `path` (partition node or image file): the first
 /// `Superblock::image_len()` bytes (`round_up(bytes_used, 4096)`, section 4.1), not the whole
-/// partition. Data without a squashfs superblock is an error. Checks `cancel` every MiB and
-/// reports `(done, image_len)`; `delay` slows it down per MiB (simulation only).
+/// partition, through `xoros_core::device::hash_device`. Data without a squashfs superblock is
+/// an `InvalidValue` error. Reports `(done, image_len)` per MiB; `delay` slows it down per MiB
+/// (simulation only).
 pub fn hash_squashfs(
-    mut file: impl std::io::Read + std::io::Seek,
-    what: &str,
+    path: &std::path::Path,
     progress: ProgressFn<'_>,
     cancel: &CancelToken,
     delay: Option<std::time::Duration>,
 ) -> Result<String> {
-    use sha2::{Digest, Sha256};
-    use std::io::SeekFrom;
-    let sb = xoros_core::squashfs::Superblock::read(&mut file).map_err(|e| match e {
-        xoros_core::Error::NotSquashfs => BackendError::new(
-            ErrorKind::InvalidValue,
-            format!("{what} does not contain a squashfs image."),
-        ),
-        other => BackendError::new(ErrorKind::Io, format!("{what}: {other}")),
-    })?;
-    let total = sb.image_len();
-    file.seek(SeekFrom::Start(0))
-        .map_err(|e| BackendError::io(format!("Cannot seek in {what}"), e))?;
-    let mut hasher = Sha256::new();
-    let mut buf = vec![0u8; 1024 * 1024];
-    let mut done = 0u64;
-    progress(0, total);
-    while done < total {
-        if cancel.is_cancelled() {
-            return Err(BackendError::cancelled());
-        }
-        let want = (total - done).min(buf.len() as u64) as usize;
-        let n = file
-            .read(&mut buf[..want])
-            .map_err(|e| BackendError::io(format!("Read error in {what}"), e))?;
-        if n == 0 {
-            return Err(BackendError::new(
-                ErrorKind::Io,
-                format!("{what} ends after {done} of {total} image bytes."),
-            ));
-        }
-        hasher.update(&buf[..n]);
-        done += n as u64;
-        progress(done, total);
+    let progress = std::cell::RefCell::new(progress);
+    let report = |e: &xoros_core::ProgressEvent| {
+        (progress.borrow_mut())(e.bytes_done, e.bytes_total);
         if let Some(d) = delay {
             std::thread::sleep(d);
         }
-    }
-    Ok(hasher
-        .finalize()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect())
+    };
+    xoros_core::device::hash_device(path, None, &report, cancel)
+        .map(|h| h.sha256)
+        .map_err(|e| match e {
+            xoros_core::Error::NotSquashfs => BackendError::new(
+                ErrorKind::InvalidValue,
+                format!("{} does not contain a squashfs image.", path.display()),
+            ),
+            other => core::core_err(other),
+        })
 }
 
 /// Everything the rescue shell needs from the system. Implementations must be thread safe;

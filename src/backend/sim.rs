@@ -547,11 +547,9 @@ impl SystemBackend for SimBackend {
         let s = self.load()?;
         Self::check_fail(&s, &format!("hash_image.{}", role.label()))?;
         let path = self.image_path(&s, role);
-        let f = fs::File::open(&path)
-            .map_err(|e| BackendError::io(format!("Cannot open {}", path.display()), e))?;
         let delay =
             (s.hash_delay_ms_per_mib > 0).then(|| Duration::from_millis(s.hash_delay_ms_per_mib));
-        super::hash_squashfs(f, &path.display().to_string(), progress, cancel, delay)
+        super::hash_squashfs(&path, progress, cancel, delay)
     }
 
     fn external_sticks(&self) -> Result<Vec<Stick>> {

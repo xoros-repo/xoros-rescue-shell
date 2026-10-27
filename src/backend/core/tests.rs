@@ -385,6 +385,41 @@ fn sticks_exclude_the_boot_disk() {
     assert!(b.mount_stick(&gone, false).is_err());
 }
 
+/// USB-1: the file system of a stick is probed from its superblock (no udev type), so it is
+/// mounted with that type only (no vfat attempt on an ext4 stick).
+#[test]
+fn stick_file_system_is_probed() {
+    let f = rescue_fixture();
+    f.add_disk(&Disk {
+        name: "sdc",
+        devpath: "pci0000:00/0000:00:14.0/usb2/2-2/2-2:1.0/host3/target3:0:0/3:0:0:0",
+        major: 8,
+        first_minor: 32,
+        parts: &[Part {
+            label: "DATA",
+            fs: "",
+        }],
+        removable: true,
+        model: "Ext Stick",
+    });
+    let mut img = xoros_core::ext4::fake_image("BACKUPS", 4096, 4096, 2000, 1);
+    img.resize(80 * 1024, 0);
+    write(&f.paths.dev.join("sdc1"), &img);
+    let b = f.backend();
+    let sticks = b.external_sticks().expect("sticks");
+    let st = sticks.iter().find(|s| s.id == "sdc1").expect("sdc1");
+    assert_eq!(st.fs_type.as_deref(), Some("ext4"));
+    assert!(!st.is_fat());
+    assert!(st.description.contains("ext4  BACKUPS"), "{}", st.description);
+    // A partition without a recognisable file system is not offered.
+    write(&f.paths.dev.join("sdc1"), &[0u8; 80 * 1024]);
+    assert!(!b
+        .external_sticks()
+        .expect("sticks")
+        .iter()
+        .any(|s| s.id == "sdc1"));
+}
+
 #[test]
 fn persistent_partitions() {
     let mut f = rescue_fixture();
@@ -485,6 +520,62 @@ fn ext4_superblock_parsing() {
         .expect("ext4");
     assert_eq!(u.total, ((1u64 << 32) + 100) * 1024);
     assert_eq!(u.used, ((1u64 << 32) + 60) * 1024);
+}
+
+/// The computed ext4 metadata overhead matches what mke2fs (1.47+) records, so the usage is
+/// the one `df` shows (fresh file system: almost nothing used). Skipped without `mkfs.ext4`.
+#[test]
+fn ext4_usage_like_df() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let img = dir.path().join("fs.img");
+    let variants: &[&[&str]] = &[
+        &[],
+        &["-b", "1024"],
+        &["-O", "^has_journal"],
+        &["-O", "^flex_bg"],
+        &["-O", "meta_bg,^resize_inode"],
+        &["-O", "sparse_super2"],
+        &["-t", "ext2"],
+        &["-N", "100000"],
+    ];
+    for opts in variants {
+        let _ = fs::remove_file(&img);
+        fs::File::create(&img)
+            .and_then(|f| f.set_len(300 << 20))
+            .expect("image");
+        let ok = std::process::Command::new("mkfs.ext4")
+            .args(["-q", "-F"])
+            .args(*opts)
+            .arg(&img)
+            .env("PATH", "/usr/sbin:/sbin:/usr/bin:/bin")
+            .output()
+            .map(|o| o.status.success());
+        if ok.is_err() {
+            eprintln!("mkfs.ext4 not available: skipped");
+            return;
+        }
+        assert_eq!(ok.ok(), Some(true), "mkfs.ext4 {opts:?}");
+        let mut data = fs::read(&img).expect("read");
+        let sb = 1024usize;
+        let recorded = u32::from_le_bytes(data[sb + 0x248..sb + 0x24c].try_into().expect("4"));
+        let with_record = ext4_usage(std::io::Cursor::new(&data))
+            .expect("io")
+            .expect("ext4");
+        // Without the recorded value the overhead is computed like the kernel does.
+        data[sb + 0x248..sb + 0x24c].copy_from_slice(&[0; 4]);
+        let computed = ext4_usage(std::io::Cursor::new(&data))
+            .expect("io")
+            .expect("ext4");
+        if recorded > 0 {
+            assert_eq!(computed, with_record, "mkfs.ext4 {opts:?}");
+        }
+        assert!(
+            computed.used < 2 << 20,
+            "fresh file system shows {} used ({opts:?})",
+            computed.used
+        );
+        assert!(computed.total > 200 << 20 && computed.total < 300 << 20);
+    }
 }
 
 #[test]
