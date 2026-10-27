@@ -26,7 +26,7 @@ use crate::tasks::{lock, TaskCtx, TaskFailure, TaskKind};
 
 /// Directory below the run directory with the results of this boot; the diagnostics bundle
 /// (LOG-2) includes every file in it.
-pub const RESULTS_SUBDIR: &str = "test-results";
+pub use crate::constants::TEST_RESULTS_SUBDIR as RESULTS_SUBDIR;
 /// All results of this boot (JSON), in [`RESULTS_SUBDIR`].
 pub const RESULTS_FILE: &str = "results.json";
 

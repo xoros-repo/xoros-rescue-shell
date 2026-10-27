@@ -5,7 +5,7 @@
 //!   `.json`);
 //! - the bundle `xoros-diag-<hostname>-<YYYYMMDD-HHMMSS>.tar.gz`: the report, grubenv, both
 //!   slots' `xoros.env`, the partition table, `dmesg`, `journalctl -b`, the app log, test
-//!   results (`<run dir>/test-results.json` as text and JSON, plus files in `<run dir>/test-results/`), the last network test and the network
+//!   results (`<run dir>/test-results/`), the last network test and the network
 //!   configuration. Wi-Fi secrets are never included: the configuration is redacted and lines
 //!   that look like `psk=` / password assignments are masked in all logs.
 
@@ -238,11 +238,6 @@ pub fn bundle_files(app: &App, ctx: Option<&TaskCtx>) -> Vec<(String, Vec<u8>)> 
         add("network-test.txt", t);
     }
     msg("Test results");
-    let store = crate::hwtest::ResultStore::new(&b.run_dir());
-    if let Some(Ok(json)) = store.path().map(fs::read) {
-        add("test-results.txt", store.text());
-        files.push((crate::hwtest::RESULTS_FILE.to_string(), json));
-    }
     let tests = b.run_dir().join(TEST_RESULTS_SUBDIR);
     if let Ok(rd) = fs::read_dir(&tests) {
         let mut names: Vec<_> = rd.flatten().filter(|e| e.path().is_file()).collect();
