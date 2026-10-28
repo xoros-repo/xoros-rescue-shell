@@ -648,6 +648,28 @@ impl SystemBackend for CoreBackend {
             .open_read(PartRole::slot(slot).into())
             .map_err(core_err)
     }
+
+    fn read_boot_file(&self, rel: &str) -> Result<Option<String>> {
+        let layout = self.core_layout()?;
+        let part = layout.partition(xoros_core::consts::PartitionRole::Boot);
+        let guard = self.mount_request(
+            mount::MountRequest::new(&part.node, part.dev, self.paths.mount_dir.join("boot-ro"))
+                .fs_type(FsType::Vfat),
+        )?;
+        let path = guard.path().join(rel.trim_start_matches('/'));
+        let r = match fs::read_to_string(&path) {
+            Ok(t) => Ok(Some(t)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(BackendError::io(path.display(), e)),
+        };
+        guard.unmount()?;
+        r
+    }
+
+    fn stick_test_target(&self, disk: &str) -> Result<(PathBuf, u64)> {
+        let d = super::check_stick_test_disk(&self.block_devices()?, disk)?;
+        Ok((self.paths.dev.join(&d.name), d.size))
+    }
 }
 
 #[cfg(test)]

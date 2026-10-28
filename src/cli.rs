@@ -80,7 +80,7 @@ Usage:
   xoros-rescue-shell [--sim <dir>] --cli test disk [--device disk|<partition label>|<kernel name>]
   xoros-rescue-shell [--sim <dir>] --cli test fsck [overlay] [application] [--repair --confirm REPAIR]
   xoros-rescue-shell [--sim <dir>] --cli test results [--json]
-{}  xoros-rescue-shell --sim-init <dir>               create an example simulation dir
+{}{}  xoros-rescue-shell --sim-init <dir>               create an example simulation dir
   xoros-rescue-shell --help | --version
 
 Options:
@@ -102,6 +102,7 @@ Exit codes:
   2  the command line could not be parsed
   3  a test ran and found a problem (FAIL)
 ",
+        crate::cli_tests::USAGE,
         crate::cli_net::USAGE
     )
 }
@@ -819,6 +820,9 @@ fn test_request(app: &App, args: &[String]) -> Result<Option<hwtest::TestRequest
 /// `--cli test ...`; prints the result and returns the exit code of its outcome (0 pass or
 /// warning, 3 fail, 1 error/cancelled).
 pub fn run_test(app: &App, args: &[String]) -> i32 {
+    if let Some(code) = crate::cli_tests::run_test_command(app, args) {
+        return code;
+    }
     let req = match test_request(app, args) {
         Ok(Some(r)) => r,
         Ok(None) => {

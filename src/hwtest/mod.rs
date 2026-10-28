@@ -10,6 +10,7 @@
 pub mod diskread;
 pub mod fsck;
 pub mod memtest;
+pub mod memtest86;
 pub mod slotcheck;
 
 use std::fmt;

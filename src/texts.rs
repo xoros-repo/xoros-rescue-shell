@@ -133,3 +133,14 @@ pub const FSCK_REPAIR_WORD: &str = "REPAIR";
 pub const SSH_INFO: &str = "Remote support: starts sshd with a one-time root password. \
 Anyone on the network who knows the password can log in as root. Stop it when done; it also \
 stops when the rescue shell exits. Public keys can be loaded from 'authorized_keys' on a stick.";
+
+// --- shell-b: TST-2, TST-7, TST-8, TST-9, NET-4 speed test, NET-5 WPA3 ---
+
+pub const TITLE_MEMTEST86: &str = "Reboot into memtest86+";
+
+pub const MEMTEST86_MISSING: &str = "This device has no memtest86+ boot entry (GRUB menu id \
+MENU_MEMTEST). It is only installed on x86 images; use Tests -> Memory test instead.";
+
+pub const MEMTEST86_CONFIRM: &str = "Reboot into memtest86+ now? It tests all memory, \
+including the memory the kernel uses here, and runs until you stop it. Then switch the device \
+off or press Esc in memtest86+ to reboot; the next boot is a normal one.";

@@ -35,6 +35,7 @@ pub fn menu() -> Tree {
             run_test(s, TestRequest::Rescue);
         })
         .leaf("Memory test...", memory_start)
+        .leaf("Reboot into memtest86+...", memtest86_start)
         .leaf("Disk read test...", disk_start)
         .leaf("File system check...", fsck_start)
         .delimiter()
@@ -321,4 +322,34 @@ fn fsck_repair_confirm(s: &mut Cursive, roles: Vec<PartRole>) {
             )
         },
     );
+}
+
+// --- TST-2 ---
+
+fn memtest86_start(s: &mut Cursive) {
+    use crate::hwtest::memtest86;
+    let Some(a) = app(s) else { return };
+    pop_to_base(s);
+    match memtest86::available(a.backend.as_ref()) {
+        Ok(true) => dialogs::confirm(
+            s,
+            texts::TITLE_MEMTEST86,
+            texts::MEMTEST86_CONFIRM,
+            "Reboot",
+            |s| {
+                let Some(app) = app(s) else { return };
+                if let Some(t) = app.tasks.write_running() {
+                    let e = format!("'{}' is still running.", t.name());
+                    dialogs::error(s, "Cannot reboot now.", &e);
+                    return;
+                }
+                match memtest86::set_next_boot(app.backend.as_ref()) {
+                    Ok(()) => crate::ui::power::run_plan(s, crate::power::PowerPlan::reboot()),
+                    Err(e) => dialogs::error(s, "Cannot set the next boot entry.", &e),
+                }
+            },
+        ),
+        Ok(false) => dialogs::info(s, texts::TITLE_MEMTEST86, texts::MEMTEST86_MISSING),
+        Err(e) => dialogs::error(s, "Cannot read the boot configuration.", &e),
+    }
 }

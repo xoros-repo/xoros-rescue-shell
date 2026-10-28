@@ -712,6 +712,34 @@ pub trait SystemBackend: Send + Sync {
     fn slot_written(&self, _slot: Slot, _info: &BuildInfo) -> Result<()> {
         Ok(())
     }
+
+    /// A text file on the boot partition, e.g. `EFI/BOOT/grub.cfg` (TST-2); `Ok(None)` if it
+    /// does not exist. The partition is mounted read-only for the read only.
+    fn read_boot_file(&self, _rel: &str) -> Result<Option<String>> {
+        Err(BackendError::not_available("Reading the boot partition"))
+    }
+
+    /// Device to overwrite in the destructive stick test (TST-8) and its size: the whole
+    /// external disk `disk` (kernel name). Refuses the boot disk and unknown disks. The
+    /// simulation uses an image file.
+    fn stick_test_target(&self, disk: &str) -> Result<(PathBuf, u64)> {
+        Err(BackendError::not_available(&format!("Testing {disk}")))
+    }
+}
+
+/// Check that `disk` is a whole disk in `devices` and not the boot disk (TST-8).
+pub fn check_stick_test_disk(devices: &[BlockDevice], disk: &str) -> Result<BlockDevice> {
+    let d = devices
+        .iter()
+        .find(|d| d.name == disk)
+        .ok_or_else(|| BackendError::invalid("disk", disk))?;
+    if d.boot_disk {
+        return Err(BackendError::new(
+            ErrorKind::InvalidValue,
+            format!("{disk} is the boot disk: it is never offered for the stick test."),
+        ));
+    }
+    Ok(d.clone())
 }
 
 /// Refuse roles that are not persistent partitions (NF-4: never write boot/rootfs/rescue).

@@ -7,6 +7,7 @@ pub mod backup_jobs;
 pub mod boot;
 pub mod cli;
 pub mod cli_net;
+pub mod cli_tests;
 pub mod clock;
 pub mod cmd;
 pub mod diagnostics;
