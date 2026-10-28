@@ -62,7 +62,7 @@ pub fn install_panic_hook() {
     std::panic::set_hook(Box::new(move |info| {
         let on_main = MAIN_THREAD
             .get()
-            .map_or(true, |id| *id == std::thread::current().id());
+            .is_none_or(|id| *id == std::thread::current().id());
         let thread = std::thread::current()
             .name()
             .unwrap_or("unnamed")

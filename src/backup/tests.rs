@@ -215,7 +215,7 @@ fn snapshot(root: &Path, role: PartitionRole) -> BTreeMap<Vec<u8>, Node> {
             }
         }
         let sha = if ft.is_file() {
-            Some(format!("{:x}", Sha256::digest(fs::read(&p).unwrap())))
+            Some(split::hex(&Sha256::digest(fs::read(&p).unwrap())))
         } else {
             None
         };
@@ -980,7 +980,7 @@ fn hostile_archive(dir: &Path, outside: &Path) -> BackupInfo {
     let data = fs::read(dir.join(name)).unwrap();
     fs::write(
         dir.join(format!("{name}.sha256")),
-        format!("{:x}  {name}\n", Sha256::digest(&data)),
+        format!("{}  {name}\n", split::hex(&Sha256::digest(&data))),
     )
     .unwrap();
     backup_info(dir, name).unwrap()

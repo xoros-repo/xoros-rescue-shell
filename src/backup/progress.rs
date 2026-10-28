@@ -118,7 +118,7 @@ impl<'a, 'b> Reporter<'a, 'b> {
         if force
             || self
                 .last
-                .map_or(true, |t| now.duration_since(t) >= MIN_INTERVAL)
+                .is_none_or(|t| now.duration_since(t) >= MIN_INTERVAL)
         {
             self.last = Some(now);
             (self.cb)(&self.state);

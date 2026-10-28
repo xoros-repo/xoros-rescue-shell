@@ -315,7 +315,7 @@ fn ext4_overhead_blocks(d: &[u8], sb: &xoros_core::ext4::Superblock) -> u64 {
     let inode_size = if le32(0x4c) == 0 { 128 } else { le16(0x58) };
     let inode_table = (inodes_per_group * inode_size).div_ceil(bs);
     let is_power = |mut n: u64, base: u64| {
-        while n > 1 && n % base == 0 {
+        while n > 1 && n.is_multiple_of(base) {
             n /= base;
         }
         n == 1
