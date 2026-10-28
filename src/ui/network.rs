@@ -13,7 +13,6 @@ use cursive::views::{
 use cursive::Cursive;
 use xoros_core::net::nm_keyfile::NetConfig;
 
-use crate::constants::{DEFAULT_HTTP_PROXY, DEFAULT_OTA_BASE_URL};
 use crate::net::profile::{self, ConfigInput, WifiInput};
 use crate::net::{config, diag, http, info, nm, time, wifi, NetEnv};
 use crate::tasks::{TaskFailure, TaskKind};
@@ -96,16 +95,14 @@ fn test(s: &mut Cursive) {
     pop_to_base(s);
     let Some(a) = app(s) else { return };
     let dev = crate::update_jobs::device_target(a.backend.as_ref());
+    let cfg = crate::settings::current();
     let url = match &dev.target {
-        Some(t) => format!(
-            "{}/manifest.json",
-            http::ota_dir_url(DEFAULT_OTA_BASE_URL, t)
-        ),
-        None => DEFAULT_OTA_BASE_URL.to_string(),
+        Some(t) => format!("{}/manifest.json", http::ota_dir_url(&cfg.ota_base_url, t)),
+        None => cfg.ota_base_url.clone(),
     };
     let opts = diag::TestOptions {
         url,
-        proxy: Some(DEFAULT_HTTP_PROXY.to_string()).filter(|p| !p.is_empty()),
+        proxy: cfg.proxy(),
     };
     jobs::run(
         s,
@@ -128,6 +125,13 @@ fn test(s: &mut Cursive) {
 fn time_text() -> String {
     let now = SystemTime::now();
     let mut t = format!("Current time: {}\n", time::format_utc(now));
+    if let Some(rtc) = time::rtc_text() {
+        t.push_str(&format!("Hardware clock: {rtc}\n"));
+    }
+    t.push_str(&format!(
+        "Time servers: {}\n",
+        crate::settings::current().ntp_servers().join(", ")
+    ));
     if !time::clock_plausible() {
         t.push_str(&format!(
             "\nThe clock is before the build date of this app ({}): HTTPS will fail.\n\
@@ -175,17 +179,10 @@ fn date_time(s: &mut Cursive) {
                     .call_on_name(TIME_INPUT, |v: &mut EditView| v.get_content().to_string())
                     .unwrap_or_default();
                 let Some(env) = env(s) else { return };
-                match time::parse_manual(&text).and_then(|t| {
-                    time::set_system_time(&env, t)?;
-                    Ok(t)
-                }) {
-                    Ok(t) => {
+                match time::parse_manual(&text).and_then(|t| time::set_manual(&env, t)) {
+                    Ok(msg) => {
                         s.pop_layer();
-                        dialogs::info(
-                            s,
-                            "Date and time",
-                            &format!("Clock set to {}.", time::format_utc(t)),
-                        );
+                        dialogs::info(s, "Date and time", &msg);
                     }
                     Err(e) => dialogs::error(s, "Cannot set the time.", &e),
                 }

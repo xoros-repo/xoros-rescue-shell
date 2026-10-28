@@ -152,8 +152,19 @@ pub fn mke2fs_ext4(
     device: &str,
     role: PartitionRole,
 ) -> Result<CommandOutput, ToolError> {
+    mke2fs_ext4_uuid(runner, device, role, role.fs_uuid())
+}
+
+/// [`mke2fs_ext4`] with an explicit file system UUID (BAK-6: "the fs uuid if known", e.g. the
+/// one read from the old superblock).
+pub fn mke2fs_ext4_uuid(
+    runner: &dyn CommandRunner,
+    device: &str,
+    role: PartitionRole,
+    uuid: Option<&str>,
+) -> Result<CommandOutput, ToolError> {
     let mut args = vec!["-F", "-t", "ext4", "-L", role.fs_label()];
-    if let Some(u) = role.fs_uuid() {
+    if let Some(u) = uuid {
         args.push("-U");
         args.push(u);
     }

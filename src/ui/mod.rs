@@ -168,7 +168,7 @@ fn start_ticker(s: &Cursive) {
 pub fn run(app: App) -> Result<(), String> {
     let app = Arc::new(app);
     let mut siv = Cursive::new();
-    siv.set_theme(theme::theme());
+    siv.set_theme(theme::named(&crate::settings::current().theme));
     siv.set_user_data(Arc::clone(&app));
     build_menubar(&mut siv);
     siv.add_fullscreen_layer(base_layer());

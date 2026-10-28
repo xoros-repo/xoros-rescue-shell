@@ -24,3 +24,48 @@ pub fn theme() -> Theme {
         palette,
     }
 }
+
+/// Theme by its settings name (CFG-1 `theme`, see [`crate::settings::THEMES`]); unknown names
+/// get the default theme.
+pub fn named(name: &str) -> Theme {
+    let dark = Color::Dark;
+    let mut t = theme();
+    let p = &mut t.palette;
+    match name {
+        "dark" => {
+            p[PaletteColor::Background] = dark(BaseColor::Black);
+            p[PaletteColor::View] = dark(BaseColor::Black);
+            p[PaletteColor::Primary] = dark(BaseColor::White);
+            p[PaletteColor::Secondary] = dark(BaseColor::Cyan);
+            p[PaletteColor::Tertiary] = dark(BaseColor::White);
+            p[PaletteColor::TitlePrimary] = dark(BaseColor::Cyan);
+            p[PaletteColor::TitleSecondary] = dark(BaseColor::Cyan);
+            p[PaletteColor::Highlight] = dark(BaseColor::Cyan);
+            p[PaletteColor::HighlightInactive] = dark(BaseColor::Blue);
+            p[PaletteColor::HighlightText] = dark(BaseColor::Black);
+        }
+        "mono" => {
+            for c in [
+                PaletteColor::Background,
+                PaletteColor::Shadow,
+                PaletteColor::View,
+                PaletteColor::HighlightText,
+            ] {
+                p[c] = dark(BaseColor::Black);
+            }
+            for c in [
+                PaletteColor::Primary,
+                PaletteColor::Secondary,
+                PaletteColor::Tertiary,
+                PaletteColor::TitlePrimary,
+                PaletteColor::TitleSecondary,
+                PaletteColor::Highlight,
+                PaletteColor::HighlightInactive,
+            ] {
+                p[c] = dark(BaseColor::White);
+            }
+        }
+        _ => {}
+    }
+    t
+}

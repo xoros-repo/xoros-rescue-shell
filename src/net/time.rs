@@ -7,7 +7,9 @@ use chrono::{NaiveDateTime, TimeZone, Utc};
 
 use super::config::dns_servers;
 use super::{dns, sntp, NetEnv};
-use crate::constants::{BUILD_EPOCH, DEFAULT_NTP_SERVERS};
+use std::path::Path;
+
+use crate::constants::{BUILD_EPOCH, RTC_DEVICE};
 
 /// Build time of the app; the clock must not be earlier (NET-7).
 pub fn build_time() -> SystemTime {
@@ -68,6 +70,29 @@ pub fn set_system_time(env: &NetEnv, t: SystemTime) -> Result<(), String> {
     Ok(())
 }
 
+/// Manual date/time entry (NET-7): set the system clock and the RTC. Returns the text for the
+/// user.
+pub fn set_manual(env: &NetEnv, t: SystemTime) -> Result<String, String> {
+    set_system_time(env, t)?;
+    let mut msg = format!("Clock set to {}.", format_utc(t));
+    if let Some(n) = crate::rtc::store(env.simulation, Path::new(RTC_DEVICE), t) {
+        msg = format!("{msg} {n}");
+    }
+    Ok(msg)
+}
+
+/// The hardware clock for display: `None` when there is none.
+pub fn rtc_text() -> Option<String> {
+    let dev = Path::new(RTC_DEVICE);
+    if !dev.exists() {
+        return None;
+    }
+    Some(match crate::rtc::read(dev) {
+        Ok(t) => format!("{} ({})", format_utc(t), dev.display()),
+        Err(e) => e,
+    })
+}
+
 /// Result of [`sync`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct SyncReport {
@@ -77,6 +102,8 @@ pub struct SyncReport {
     pub new_time: SystemTime,
     /// The clock was changed (offset above 0.5 s).
     pub changed: bool,
+    /// What happened to the hardware clock (`None`: no RTC).
+    pub rtc_note: Option<String>,
 }
 
 impl SyncReport {
@@ -88,7 +115,7 @@ impl SyncReport {
             self.offset,
             format_utc(self.new_time),
             if self.changed { "" } else { " (unchanged)" }
-        )
+        ) + &self.rtc_note.as_ref().map(|n| format!(" {n}")).unwrap_or_default()
     }
 }
 
@@ -103,10 +130,10 @@ fn server_addrs(env: &NetEnv, server: &str) -> Result<Vec<SocketAddr>, String> {
     Ok(ips.into_iter().map(|ip| SocketAddr::new(ip, port)).collect())
 }
 
-/// NET-7: query the servers in order (default [`DEFAULT_NTP_SERVERS`]) and set the clock from
-/// the first answer.
+/// NET-7: query the servers in order (default: `ntp_servers` of the settings, CFG-1) and set
+/// the clock from the first answer.
 pub fn sync(env: &NetEnv, servers: &[String]) -> Result<SyncReport, String> {
-    let default: Vec<String> = DEFAULT_NTP_SERVERS.iter().map(|s| s.to_string()).collect();
+    let default = crate::settings::current().ntp_servers();
     let servers = if servers.is_empty() { &default } else { servers };
     let mut errors = Vec::new();
     for server in servers {
@@ -132,6 +159,7 @@ pub fn sync(env: &NetEnv, servers: &[String]) -> Result<SyncReport, String> {
                         offset: r.offset,
                         new_time,
                         changed,
+                        rtc_note: crate::rtc::store(env.simulation, Path::new(RTC_DEVICE), new_time),
                     });
                 }
                 Err(e) => errors.push(format!("{server} ({addr}): {e}")),

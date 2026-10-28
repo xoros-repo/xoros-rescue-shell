@@ -145,3 +145,12 @@ pub const WRITE_BOTH_CONFIRM_WORD: &str = "WRITE";
 /// Build time of the app (seconds since the epoch, from build.rs / `SOURCE_DATE_EPOCH`): a
 /// clock before this is certainly wrong (NET-7).
 pub const BUILD_EPOCH: &str = env!("XOROS_BUILD_EPOCH");
+
+/// Settings file in the overlay partition's [`RESCUE_DIR`] (CFG-1).
+pub const SETTINGS_FILE_NAME: &str = "rescue-shell.toml";
+
+/// OTA signing keys shipped with the rescue image (one hex key per line, DIST-5, OTA-8).
+pub const OTA_TRUSTED_KEYS_FILE: &str = "/etc/xoros/ota-trusted-keys";
+
+/// Real-time clock device written after a time sync (NET-7).
+pub const RTC_DEVICE: &str = "/dev/rtc0";

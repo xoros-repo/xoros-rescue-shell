@@ -9,7 +9,7 @@ use xoros_rescue_shell::cli::{
     run_update, usage, Command,
 };
 use xoros_rescue_shell::constants::{APP_NAME, APP_VERSION};
-use xoros_rescue_shell::{logging, terminal, ui};
+use xoros_rescue_shell::{cli_admin, logging, terminal, ui};
 
 fn main() -> ExitCode {
     let opts = match parse_args(std::env::args().skip(1)) {
@@ -50,7 +50,11 @@ fn main() -> ExitCode {
         | Command::Test(_)
         | Command::Report(_)
         | Command::Diag(_)
-        | Command::Ssh(_) => {}
+        | Command::Ssh(_)
+        | Command::Boot(_)
+        | Command::Power(_)
+        | Command::Settings(_)
+        | Command::Stick(_) => {}
     }
 
     let backend = match make_backend(sim_dir(opts.sim)) {
@@ -66,6 +70,8 @@ fn main() -> ExitCode {
     terminal::install_panic_hook();
     log::info!("{APP_NAME} {APP_VERSION} starting ({})", backend.describe());
 
+    // CFG-1: settings from the overlay partition (defaults when it is missing or broken).
+    xoros_rescue_shell::settings::install(xoros_rescue_shell::settings::load(backend.as_ref()));
     let app = App::new(backend);
     match opts.command {
         Command::Status { json, hash } => match run_status(&app, json, hash) {
@@ -80,6 +86,10 @@ fn main() -> ExitCode {
         Command::Report(args) => exit(run_report(&app, &args)),
         Command::Diag(args) => exit(run_diag(&app, &args)),
         Command::Ssh(args) => exit(run_ssh(&app, &args)),
+        Command::Boot(args) => exit(cli_admin::run_boot(&app, &args)),
+        Command::Power(args) => exit(cli_admin::run_power(&app, &args)),
+        Command::Settings(args) => exit(cli_admin::run_settings(&app, &args)),
+        Command::Stick(args) => exit(cli_admin::run_stick(&app, &args)),
         _ => match ui::run(app) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {

@@ -15,7 +15,7 @@ use xoros_core::manifest::Target;
 
 use crate::backend::Slot;
 use crate::clock::format_build_timestamp;
-use crate::constants::{DEFAULT_HTTP_PROXY, DEFAULT_OTA_BASE_URL, WRITE_BOTH_CONFIRM_WORD};
+use crate::constants::WRITE_BOTH_CONFIRM_WORD;
 use crate::tasks::{lock, TaskKind};
 use crate::texts;
 use crate::ui::dialogs::{self, closable, MAX_W};
@@ -72,10 +72,11 @@ fn ota_start(s: &mut Cursive) {
             .to_string(),
     };
     let t = dev.target.clone();
+    let cfg = crate::settings::current();
     let layout = LinearLayout::vertical()
         .child(TextView::new(intro).max_width(MAX_W))
         .child(TextView::new(" "))
-        .child(field("Server", F_BASE, DEFAULT_OTA_BASE_URL))
+        .child(field("Server", F_BASE, &cfg.ota_base_url))
         .child(field(
             "Version",
             F_VERSION,
@@ -91,7 +92,7 @@ fn ota_start(s: &mut Cursive) {
             F_SUFFIX,
             t.as_ref().map(|t| t.suffix.as_str()).unwrap_or("stable"),
         ))
-        .child(field("Proxy", F_PROXY, DEFAULT_HTTP_PROXY))
+        .child(field("Proxy", F_PROXY, &cfg.http_proxy))
         .child(TextView::new(
             "Suffix: stable, devel, audit or nightly. Proxy: http://host:port or empty.",
         ));

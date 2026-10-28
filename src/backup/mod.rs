@@ -50,6 +50,7 @@ pub use meta::{
 pub use progress::{CancelToken, Phase, Progress, ProgressFn};
 pub use reset::{factory_reset, reset_confirmed, ResetReport, RESET_CONFIRM_WORD};
 pub use split::PartInfo;
+pub(crate) use split::SplitWriter;
 
 #[cfg(test)]
 mod tests;

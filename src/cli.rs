@@ -12,7 +12,7 @@ use crate::backup::{ImportMode, PartitionRole};
 use crate::backend::{PartRole, Slot};
 use crate::backup_jobs;
 use crate::hwtest;
-use crate::constants::{DEFAULT_HTTP_PROXY, DEFAULT_OTA_BASE_URL, WRITE_BOTH_CONFIRM_WORD};
+use crate::constants::WRITE_BOTH_CONFIRM_WORD;
 use crate::net;
 use crate::slots::RescueCheck;
 use crate::update_jobs;
@@ -43,6 +43,11 @@ pub enum Command {
     Report(Vec<String>),
     Diag(Vec<String>),
     Ssh(Vec<String>),
+    /// `--cli boot|power|settings|stick <args>` (BOOT-*, PWR-*, CFG-*, USB-5; `cli_admin`).
+    Boot(Vec<String>),
+    Power(Vec<String>),
+    Settings(Vec<String>),
+    Stick(Vec<String>),
     /// `--sim-init <dir>`: write an example simulation directory.
     SimInit(PathBuf),
     Help,
@@ -80,7 +85,7 @@ Usage:
   xoros-rescue-shell [--sim <dir>] --cli test disk [--device disk|<partition label>|<kernel name>]
   xoros-rescue-shell [--sim <dir>] --cli test fsck [overlay] [application] [--repair --confirm REPAIR]
   xoros-rescue-shell [--sim <dir>] --cli test results [--json]
-{}  xoros-rescue-shell --sim-init <dir>               create an example simulation dir
+{}{}  xoros-rescue-shell --sim-init <dir>               create an example simulation dir
   xoros-rescue-shell --help | --version
 
 Options:
@@ -102,7 +107,8 @@ Exit codes:
   2  the command line could not be parsed
   3  a test ran and found a problem (FAIL)
 ",
-        crate::cli_net::USAGE
+        crate::cli_net::USAGE,
+        crate::cli_admin::USAGE
     )
 }
 
@@ -165,15 +171,21 @@ where
             Some("diag") => command = Command::Diag(words.map(str::to_string).collect()),
             Some("ssh") => command = Command::Ssh(words.map(str::to_string).collect()),
             Some("test") => command = Command::Test(words.map(str::to_string).collect()),
+            Some("boot") => command = Command::Boot(words.map(str::to_string).collect()),
+            Some("power") => command = Command::Power(words.map(str::to_string).collect()),
+            Some("settings") => command = Command::Settings(words.map(str::to_string).collect()),
+            Some("stick") => command = Command::Stick(words.map(str::to_string).collect()),
             Some(other) => {
                 return Err(format!(
                     "CLI command '{other}' is not implemented yet \
-                     (available: status, backup, update, net, time, test, report, diag, ssh)."
+                     (available: status, backup, update, net, time, test, report, diag, ssh, \
+                     boot, power, settings, stick)."
                 ))
             }
             None => {
                 return Err(
-                    "--cli needs a command (status, backup, update, net, time, test, report, diag, ssh)."
+                    "--cli needs a command (status, backup, update, net, time, test, report, diag, \
+                     ssh, boot, power, settings, stick)."
                         .into(),
                 )
             }
@@ -392,7 +404,11 @@ fn backup_cmd(app: &App, args: &[String]) -> Result<String, String> {
             }
             Ok(summary)
         }
-        _ => Err("backup needs: sticks | list | export | verify | import | reset.".into()),
+        _ => crate::cli_admin::backup_cmd(app, args).unwrap_or_else(|| {
+            Err("backup needs: sticks | list | export | verify | import | reset | repair | mkfs \
+                 | image."
+                .into())
+        }),
     }
 }
 
@@ -464,7 +480,7 @@ fn origin_arg(app: &App, args: &[String]) -> Result<update_jobs::Origin, String>
         });
     }
     let dev = update_jobs::device_target(app.backend.as_ref());
-    let base = opt_value(args, "--base").unwrap_or_else(|| DEFAULT_OTA_BASE_URL.to_string());
+    let base = opt_value(args, "--base").unwrap_or_else(|| crate::settings::current().ota_base_url);
     let version = opt_value(args, "--version").or(dev.target.as_ref().map(|t| t.version.clone()));
     let machine = opt_value(args, "--machine").or(dev.machine.clone());
     let suffix = match opt_value(args, "--suffix") {
@@ -479,9 +495,7 @@ fn origin_arg(app: &App, args: &[String]) -> Result<update_jobs::Origin, String>
             eprintln!("warning: switching suffix from '{}' to '{suffix}'.", t.suffix);
         }
     }
-    let proxy = opt_value(args, "--proxy").or_else(|| {
-        Some(DEFAULT_HTTP_PROXY.to_string()).filter(|p| !p.is_empty())
-    });
+    let proxy = opt_value(args, "--proxy").or_else(|| crate::settings::current().proxy());
     Ok(update_jobs::Origin::Network {
         base_url: base,
         target: Target::new(version, machine, suffix),
@@ -622,14 +636,14 @@ fn net_cmd(app: &App, args: &[String]) -> Result<String, String> {
         }
         Some("test") => {
             let dev = update_jobs::device_target(app.backend.as_ref());
-            let base = opt_value(args, "--base").unwrap_or_else(|| DEFAULT_OTA_BASE_URL.to_string());
+            let base = opt_value(args, "--base").unwrap_or_else(|| crate::settings::current().ota_base_url);
             let url = match &dev.target {
                 Some(t) => format!("{}/manifest.json", net::http::ota_dir_url(&base, t)),
                 None => base.clone(),
             };
             let opts = net::diag::TestOptions {
                 url,
-                proxy: opt_value(args, "--proxy"),
+                proxy: opt_value(args, "--proxy").or_else(|| crate::settings::current().proxy()),
             };
             let steps = net::diag::run(&env, &opts, &crate::tasks::CancelToken::new(), &mut |s| {
                 eprintln!("{}", net::diag::step_line(s))
@@ -669,10 +683,10 @@ fn time_cmd(app: &App, args: &[String]) -> Result<String, String> {
         Some("sync") => time::sync(&env, &args[1..]).map(|r| r.text() + "\n"),
         Some("set") => {
             let t = time::parse_manual(&args[1..].join(" "))?;
-            time::set_system_time(&env, t)?;
-            Ok(format!("Clock set to {}.\n", time::format_utc(t)))
+            time::set_manual(&env, t).map(|m| m + "\n")
         }
-        _ => Err("time needs: show | sync | set.".into()),
+        _ => crate::cli_admin::time_cmd(app, args)
+            .unwrap_or_else(|| Err("time needs: show | sync | set | rtc.".into())),
     }
 }
 
@@ -906,7 +920,11 @@ mod tests {
         );
         assert!(parse_args(["--sim"]).is_err());
         assert!(parse_args(["--cli"]).is_err());
-        assert!(parse_args(["--cli", "boot"]).is_err());
+        assert!(parse_args(["--cli", "bogus"]).is_err());
+        assert_eq!(
+            parse_args(["--cli", "boot", "next", "rootfs_b"]).map(|o| o.command),
+            Ok(Command::Boot(vec!["next".into(), "rootfs_b".into()]))
+        );
         assert_eq!(
             parse_args(["--cli", "update", "start", "--slot", "B"]).map(|o| o.command),
             Ok(Command::Update(vec!["start".into(), "--slot".into(), "B".into()]))

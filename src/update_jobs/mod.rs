@@ -269,6 +269,16 @@ fn check_squashfs_file(path: &Path) -> Result<(), TaskFailure> {
         .map_err(|e| fail(format!("{}: {e}", path.display())))
 }
 
+/// OTA-8: trusted keys and `require_signature` from the settings (CFG-1) plus the keys shipped
+/// with the rescue image (DIST-5).
+pub fn signature_policy() -> SignaturePolicy {
+    let (policy, warnings) = crate::settings::state().signature_policy();
+    for w in warnings {
+        log::warn!("OTA-8: {w}");
+    }
+    policy
+}
+
 /// Open the source of `origin` (mounts a stick read-only; OTA-10 clock check for the network).
 pub fn open_source(
     backend: &dyn SystemBackend,
@@ -476,7 +486,7 @@ fn check_opened(
         Origin::Network { target, .. } => Some(target),
         _ => None,
     };
-    let policy = SignaturePolicy::default(); // trusted keys come with CFG-1 (OTA-8)
+    let policy = signature_policy();
     let loaded =
         load_manifest(opened.source.as_ref(), net_target, &policy).map_err(core_fail)?;
     let m = loaded.manifest;
@@ -842,7 +852,7 @@ pub fn run_update(
         Origin::Network { target, .. } => Some(target),
         _ => None,
     };
-    let loaded = load_manifest(opened.source.as_ref(), net_target, &SignaturePolicy::default())
+    let loaded = load_manifest(opened.source.as_ref(), net_target, &signature_policy())
         .map_err(core_fail)?;
     let m = loaded.manifest;
     let image = m
