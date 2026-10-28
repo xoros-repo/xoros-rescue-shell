@@ -38,6 +38,7 @@ pub fn menu() -> Tree {
         .leaf("Reboot into memtest86+...", memtest86_start)
         .leaf("Disk read test...", disk_start)
         .leaf("File system check...", fsck_start)
+        .leaf("Disk health...", health_start)
         .delimiter()
         .leaf(texts::TITLE_TEST_RESULTS, show_results)
 }
@@ -352,4 +353,34 @@ fn memtest86_start(s: &mut Cursive) {
         Ok(false) => dialogs::info(s, texts::TITLE_MEMTEST86, texts::MEMTEST86_MISSING),
         Err(e) => dialogs::error(s, "Cannot read the boot configuration.", &e),
     }
+}
+
+// --- TST-7 ---
+
+fn health_start(s: &mut Cursive) {
+    let Some(a) = app(s) else { return };
+    pop_to_base(s);
+    let mut items = vec![("All disks".to_string(), Vec::new())];
+    if let Ok(disks) = a.backend.block_devices() {
+        for d in disks.iter().filter(|d| crate::hwtest::health::testable(d)) {
+            items.push((
+                format!(
+                    "{:<10} {:<10} {:<6} {}{}",
+                    d.name,
+                    format_bytes(d.size),
+                    d.transport,
+                    crate::report::ellipsize(d.model.as_deref().unwrap_or("-"), 24),
+                    if d.boot_disk { " [boot]" } else { "" }
+                ),
+                vec![d.name.clone()],
+            ));
+        }
+    }
+    choose(
+        s,
+        texts::TITLE_HEALTH,
+        texts::HEALTH_INTRO,
+        items,
+        |s, disks| run_test(s, TestRequest::Health(disks.clone())),
+    );
 }

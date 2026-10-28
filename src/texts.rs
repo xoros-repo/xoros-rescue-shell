@@ -144,3 +144,9 @@ MENU_MEMTEST). It is only installed on x86 images; use Tests -> Memory test inst
 pub const MEMTEST86_CONFIRM: &str = "Reboot into memtest86+ now? It tests all memory, \
 including the memory the kernel uses here, and runs until you stop it. Then switch the device \
 off or press Esc in memtest86+ to reboot; the next boot is a normal one.";
+
+pub const TITLE_HEALTH: &str = "Disk health";
+
+pub const HEALTH_INTRO: &str = "Reads the SMART / NVMe health data (smartctl, nvme-cli or \
+the NVMe log page) and what sysfs offers (eMMC wear, I/O error counters). Nothing is written. \
+USB sticks and SD cards usually have no SMART data.";

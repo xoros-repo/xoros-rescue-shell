@@ -679,7 +679,7 @@ fn time_cmd(app: &App, args: &[String]) -> Result<String, String> {
 
 /// Like [`check_options`], for `--cli test` sub-commands; words without `--` are allowed
 /// only when the sub-command takes positional arguments.
-fn check_test_args(
+pub(crate) fn check_test_args(
     args: &[String],
     values: &[&str],
     flags: &[&str],
@@ -734,7 +734,12 @@ fn test_request(app: &App, args: &[String]) -> Result<Option<hwtest::TestRequest
             true,
         )?,
         Some("fsck") => check_test_args(rest, &["--confirm"], &["--repair"], true)?,
-        _ => {}
+        Some(w) => {
+            if let Some(r) = crate::cli_tests::test_request(app, w, rest) {
+                return r.map(Some);
+            }
+        }
+        None => {}
     }
     Ok(Some(match args.first().map(String::as_str) {
         Some("results") => return Ok(None),
@@ -811,7 +816,9 @@ fn test_request(app: &App, args: &[String]) -> Result<Option<hwtest::TestRequest
         }
         _ => {
             return Err(
-                "test needs: slots | rescue | memory | disk | fsck | results.".into(),
+                "test needs: slots | rescue | memory | memtest86 | disk | fsck | health | \
+                 results."
+                    .into(),
             )
         }
     }))

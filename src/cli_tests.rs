@@ -3,11 +3,33 @@
 //! (NET-4 P2); called from [`crate::cli`].
 
 use crate::app::App;
-use crate::hwtest::memtest86;
+use crate::cli::check_test_args;
+use crate::hwtest::{memtest86, TestRequest};
 
 pub const USAGE: &str = "\
   xoros-rescue-shell [--sim <dir>] --cli test memtest86 [--reboot]
+  xoros-rescue-shell [--sim <dir>] --cli test health [<disk>...]
 ";
+
+/// Words of `args` that are not options.
+fn positional(args: &[String]) -> Vec<String> {
+    args.iter().filter(|a| !a.starts_with('-')).cloned().collect()
+}
+
+/// `--cli test <word> <args>` for the tests of this module; `None` for other words.
+pub fn test_request(
+    app: &App,
+    word: &str,
+    args: &[String],
+) -> Option<Result<TestRequest, String>> {
+    let _ = app;
+    Some(match word {
+        "health" => check_test_args(args, &[], &[], true).map(|()| {
+            TestRequest::Health(positional(args))
+        }),
+        _ => return None,
+    })
+}
 
 /// `--cli test <args>` commands that are not a [`crate::hwtest::TestRequest`]; `None` for the
 /// others. Returns the exit code.
@@ -84,5 +106,20 @@ mod tests {
             .unwrap()
             .contains("SIM: would run 'systemctl reboot'"));
         assert_eq!(run_test_command(&app, &a(&["memory"])), None);
+    }
+
+    #[test]
+    fn test_requests() {
+        let d = TempDir::new("cli-tests-req");
+        SimBackend::create_example(d.path()).expect("example");
+        let app = App::new(make_backend(Some(d.path().to_path_buf())).expect("backend"));
+        let req = |w: &str, v: &[&str]| test_request(&app, w, &a(v));
+        assert!(req("memory", &[]).is_none());
+        assert_eq!(req("health", &[]), Some(Ok(TestRequest::Health(vec![]))));
+        assert_eq!(
+            req("health", &["sda", "sdb"]),
+            Some(Ok(TestRequest::Health(a(&["sda", "sdb"]))))
+        );
+        assert!(matches!(req("health", &["--all"]), Some(Err(_))));
     }
 }

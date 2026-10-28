@@ -1,5 +1,6 @@
-//! Hardware and integrity tests (TST-*): memory test (TST-1), disk read test (TST-3), slot
-//! integrity (TST-4), rescue integrity (TST-5) and file system check (TST-6).
+//! Hardware and integrity tests (TST-*): memory test (TST-1), reboot into memtest86+ (TST-2),
+//! disk read test (TST-3), slot integrity (TST-4), rescue integrity (TST-5), file system check
+//! (TST-6) and disk health (TST-7).
 //!
 //! Every test runs inside a [`TaskRunner`](crate::tasks::TaskRunner) worker (progress and
 //! cancel, UI-3) through [`run_recorded`], which turns the outcome into a [`TestResult`]
@@ -9,6 +10,7 @@
 
 pub mod diskread;
 pub mod fsck;
+pub mod health;
 pub mod memtest;
 pub mod memtest86;
 pub mod slotcheck;
@@ -47,6 +49,8 @@ pub enum TestKind {
     FsCheck,
     /// TST-6, `e2fsck -f -y`.
     FsRepair,
+    /// TST-7.
+    DiskHealth,
 }
 
 impl TestKind {
@@ -58,6 +62,7 @@ impl TestKind {
             TestKind::RescueIntegrity => "Rescue integrity",
             TestKind::FsCheck => "File system check",
             TestKind::FsRepair => "File system repair",
+            TestKind::DiskHealth => "Disk health",
         }
     }
 
@@ -69,6 +74,7 @@ impl TestKind {
             TestKind::SlotIntegrity => "TST-4",
             TestKind::RescueIntegrity => "TST-5",
             TestKind::FsCheck | TestKind::FsRepair => "TST-6",
+            TestKind::DiskHealth => "TST-7",
         }
     }
 
@@ -81,6 +87,7 @@ impl TestKind {
             TestKind::RescueIntegrity => "rescue.txt",
             TestKind::FsCheck => "fsck.txt",
             TestKind::FsRepair => "fsck-repair.txt",
+            TestKind::DiskHealth => "disk-health.txt",
         }
     }
 }
@@ -340,6 +347,8 @@ pub enum TestRequest {
     Slots(slotcheck::SlotTestOptions),
     Rescue,
     Fsck(fsck::FsckRequest),
+    /// Disk health of these disks (kernel names; all when empty).
+    Health(Vec<String>),
 }
 
 impl TestRequest {
@@ -351,6 +360,7 @@ impl TestRequest {
             TestRequest::Rescue => TestKind::RescueIntegrity,
             TestRequest::Fsck(r) if r.repair => TestKind::FsRepair,
             TestRequest::Fsck(_) => TestKind::FsCheck,
+            TestRequest::Health(_) => TestKind::DiskHealth,
         }
     }
 
@@ -446,6 +456,14 @@ pub fn run_request(env: &TestEnv, req: &TestRequest, ctx: &TaskCtx) -> TestResul
                 .collect::<Vec<_>>()
                 .join(" + ");
             run_recorded(store, kind, &target, ctx, |ctx| fsck::run(backend, r, ctx))
+        }
+        TestRequest::Health(disks) => {
+            let target = if disks.is_empty() {
+                "all disks".to_string()
+            } else {
+                disks.join(" + ")
+            };
+            run_recorded(store, kind, &target, ctx, |ctx| health::run(backend, disks, ctx))
         }
     }
 }
