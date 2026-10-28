@@ -35,14 +35,18 @@ pub fn menu() -> Tree {
             run_test(s, TestRequest::Rescue);
         })
         .leaf("Memory test...", memory_start)
+        .leaf("Reboot into memtest86+...", memtest86_start)
         .leaf("Disk read test...", disk_start)
         .leaf("File system check...", fsck_start)
+        .leaf("Disk health...", health_start)
+        .leaf("Stick write test (destructive)...", stick_start)
+        .leaf("CPU stress test...", stress_start)
         .delimiter()
         .leaf(texts::TITLE_TEST_RESULTS, show_results)
 }
 
 /// Run a test in the background (progress dialog with Cancel), then show its result.
-fn run_test(s: &mut Cursive, req: TestRequest) {
+pub fn run_test(s: &mut Cursive, req: TestRequest) {
     let kind = req.kind();
     jobs::run(
         s,
@@ -289,7 +293,14 @@ fn fsck_start(s: &mut Cursive) {
     );
 }
 
+/// CFG-2: the repair asks for the PIN first.
 fn fsck_repair_confirm(s: &mut Cursive, roles: Vec<PartRole>) {
+    crate::ui::pin::require(s, "repair file system", move |s| {
+        fsck_repair_dialog(s, roles.clone())
+    });
+}
+
+fn fsck_repair_dialog(s: &mut Cursive, roles: Vec<PartRole>) {
     let Some(app) = app(s) else { return };
     let layout = app.backend.layout().ok();
     let list = roles
@@ -321,4 +332,167 @@ fn fsck_repair_confirm(s: &mut Cursive, roles: Vec<PartRole>) {
             )
         },
     );
+}
+
+// --- TST-2 ---
+
+fn memtest86_start(s: &mut Cursive) {
+    use crate::hwtest::memtest86;
+    let Some(a) = app(s) else { return };
+    pop_to_base(s);
+    match memtest86::available(a.backend.as_ref()) {
+        Ok(true) => dialogs::confirm(
+            s,
+            texts::TITLE_MEMTEST86,
+            texts::MEMTEST86_CONFIRM,
+            "Reboot",
+            |s| {
+                let Some(app) = app(s) else { return };
+                if let Some(t) = app.tasks.write_running() {
+                    let e = format!("'{}' is still running.", t.name());
+                    dialogs::error(s, "Cannot reboot now.", &e);
+                    return;
+                }
+                match memtest86::set_next_boot(app.backend.as_ref()) {
+                    Ok(()) => crate::ui::power::run_plan(s, crate::power::PowerPlan::reboot()),
+                    Err(e) => dialogs::error(s, "Cannot set the next boot entry.", &e),
+                }
+            },
+        ),
+        Ok(false) => dialogs::info(s, texts::TITLE_MEMTEST86, texts::MEMTEST86_MISSING),
+        Err(e) => dialogs::error(s, "Cannot read the boot configuration.", &e),
+    }
+}
+
+// --- TST-7 ---
+
+fn health_start(s: &mut Cursive) {
+    let Some(a) = app(s) else { return };
+    pop_to_base(s);
+    let mut items = vec![("All disks".to_string(), Vec::new())];
+    if let Ok(disks) = a.backend.block_devices() {
+        for d in disks.iter().filter(|d| crate::hwtest::health::testable(d)) {
+            items.push((
+                format!(
+                    "{:<10} {:<10} {:<6} {}{}",
+                    d.name,
+                    format_bytes(d.size),
+                    d.transport,
+                    crate::report::ellipsize(d.model.as_deref().unwrap_or("-"), 24),
+                    if d.boot_disk { " [boot]" } else { "" }
+                ),
+                vec![d.name.clone()],
+            ));
+        }
+    }
+    choose(
+        s,
+        texts::TITLE_HEALTH,
+        texts::HEALTH_INTRO,
+        items,
+        |s, disks| run_test(s, TestRequest::Health(disks.clone())),
+    );
+}
+
+// --- TST-8 ---
+
+fn stick_start(s: &mut Cursive) {
+    use crate::hwtest::sticktest::{candidates, label};
+    let Some(a) = app(s) else { return };
+    pop_to_base(s);
+    let disks = match candidates(a.backend.as_ref()) {
+        Ok(d) if d.is_empty() => {
+            dialogs::info(s, texts::TITLE_STICKTEST, "No stick found (the boot disk is never offered).");
+            return;
+        }
+        Ok(d) => d,
+        Err(e) => {
+            dialogs::error(s, "Cannot list the disks.", &e);
+            return;
+        }
+    };
+    let items = disks.into_iter().map(|d| (label(&d), d)).collect();
+    choose(
+        s,
+        texts::TITLE_STICKTEST,
+        texts::STICKTEST_INTRO,
+        items,
+        |s, d| stick_confirm(s, d.clone()),
+    );
+}
+
+/// CFG-2: the destructive stick test asks for the PIN first.
+fn stick_confirm(s: &mut Cursive, d: crate::backend::BlockDevice) {
+    crate::ui::pin::require(s, "stick write test", move |s| stick_dialog(s, d.clone()));
+}
+
+fn stick_dialog(s: &mut Cursive, d: crate::backend::BlockDevice) {
+    use crate::hwtest::sticktest::{StickTestRequest, CONFIRM_WORD};
+    let parts = if d.partitions.is_empty() {
+        "no partitions".to_string()
+    } else {
+        d.partitions
+            .iter()
+            .map(|p| {
+                format!(
+                    "{} {} {}",
+                    p.name,
+                    p.fstype.as_deref().unwrap_or("?"),
+                    format_bytes(p.size)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    // About 10 MB/s write + 20 MB/s read on a typical stick.
+    let minutes = d.size / 10_000_000 / 60 + d.size / 20_000_000 / 60 + 1;
+    let text = format!(
+        "ALL DATA on {} ({}, {}) will be destroyed:\n{parts}\n\nThis takes roughly {minutes} \
+         minute(s) or more.",
+        d.name,
+        d.model.as_deref().unwrap_or("unknown model"),
+        format_bytes(d.size)
+    );
+    let disk = d.name.clone();
+    dialogs::confirm_typed(s, texts::TITLE_STICKTEST, &text, CONFIRM_WORD, move |s, typed| {
+        run_test(
+            s,
+            TestRequest::Stick(StickTestRequest {
+                disk: disk.clone(),
+                confirmation: typed,
+            }),
+        )
+    });
+}
+
+// --- TST-9 ---
+
+const STRESS_MINUTES: &str = "test_stress_minutes";
+
+fn stress_start(s: &mut Cursive) {
+    use crate::hwtest::stress;
+    pop_to_base(s);
+    let layout = LinearLayout::vertical()
+        .child(TextView::new(texts::STRESS_INTRO).max_width(MAX_W))
+        .child(TextView::new(" "))
+        .child(number_field("Minutes (1..120)", STRESS_MINUTES, stress::DEFAULT_MINUTES));
+    s.add_layer(closable(
+        Dialog::around(layout)
+            .title(texts::TITLE_STRESS)
+            .button(texts::BTN_START, |s| {
+                let Some(m) = read_number(s, STRESS_MINUTES).filter(|m| stress::MINUTES_RANGE.contains(m))
+                else {
+                    dialogs::info(s, texts::TITLE_STRESS, "Enter 1..120 minutes.");
+                    return;
+                };
+                s.pop_layer();
+                run_test(
+                    s,
+                    TestRequest::Stress(stress::StressOptions {
+                        duration: std::time::Duration::from_secs(u64::from(m) * 60),
+                    }),
+                );
+            })
+            .dismiss_button(texts::BTN_CANCEL),
+    ));
 }

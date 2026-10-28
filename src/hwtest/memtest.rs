@@ -1,8 +1,10 @@
 //! TST-1: userspace memory test. Allocates and `mlock`s a share of `MemAvailable` (default
 //! 80 %, leaving at least 64 MiB) and runs, per pass: solid bits (0x00/0xFF), checkerboard,
 //! walking ones, walking zeros, address-in-address, seeded random data and a bit-flip test.
-//! Failing words are reported with their offset in the test buffer and the expected/actual
-//! values. A userspace test cannot reach memory used by the kernel and the app itself.
+//! Failing words are reported with their virtual address, the physical address (from
+//! `/proc/self/pagemap`, readable as root) and the offset in the test buffer, plus the
+//! expected/actual values. A userspace test cannot reach memory used by the kernel and the
+//! app itself.
 
 use std::fmt::Write as _;
 use std::path::Path;
@@ -88,20 +90,70 @@ pub struct MemError {
     pub pattern: String,
     /// Byte offset in the test buffer.
     pub offset: u64,
+    /// Virtual address of the word in the app.
+    pub address: u64,
+    /// Physical address, if `/proc/self/pagemap` shows it (root only).
+    pub physical: Option<u64>,
     pub expected: u64,
     pub actual: u64,
 }
 
 impl MemError {
+    /// Two lines: where (physical address first, the one that identifies the RAM location)
+    /// and what.
     pub fn line(&self) -> String {
+        let phys = match self.physical {
+            Some(p) => format!("physical 0x{p:010x}"),
+            None => "physical unknown".to_string(),
+        };
         format!(
-            "{}: offset 0x{:010x} expected 0x{:016x} actual 0x{:016x} (bits 0x{:016x})",
+            "{}: {phys}, virtual 0x{:012x} (offset 0x{:x})\n    expected 0x{:016x} actual 0x{:016x} bits 0x{:016x}",
             self.pattern,
+            self.address,
             self.offset,
             self.expected,
             self.actual,
             self.expected ^ self.actual
         )
+    }
+}
+
+/// Page frame of a `/proc/<pid>/pagemap` entry: bit 63 "present", bits 0..=54 the PFN (zero
+/// without CAP_SYS_ADMIN). Returns the physical address of `vaddr`.
+pub fn phys_from_pagemap_entry(entry: u64, vaddr: u64, page_size: u64) -> Option<u64> {
+    let present = entry & (1 << 63) != 0;
+    let pfn = entry & ((1 << 55) - 1);
+    if !present || pfn == 0 || page_size == 0 {
+        return None;
+    }
+    Some(pfn * page_size + vaddr % page_size)
+}
+
+/// Fill in the physical addresses of `errors` from `pagemap` (the app's own,
+/// `/proc/self/pagemap`). The buffer must still be mapped (and locked).
+pub fn resolve_physical(pagemap: &Path, page_size: u64, errors: &mut [MemError]) {
+    use std::os::unix::fs::FileExt;
+    if errors.is_empty() || page_size == 0 {
+        return;
+    }
+    let Ok(f) = std::fs::File::open(pagemap) else {
+        return;
+    };
+    for e in errors {
+        let mut b = [0u8; 8];
+        if f.read_exact_at(&mut b, e.address / page_size * 8).is_ok() {
+            e.physical = phys_from_pagemap_entry(u64::from_le_bytes(b), e.address, page_size);
+        }
+    }
+}
+
+fn page_size() -> u64 {
+    // SAFETY: sysconf has no side effects.
+    let n = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    if n > 0 {
+        n as u64
+    } else {
+        4096
     }
 }
 
@@ -153,6 +205,8 @@ impl<'a> Tester<'a> {
             self.errors.push(MemError {
                 pattern: pattern.to_string(),
                 offset: i as u64 * 8,
+                address: self.base.wrapping_add(i as u64 * 8),
+                physical: None,
                 expected,
                 actual,
             });
@@ -384,8 +438,10 @@ pub fn run(proc_root: &Path, opts: &MemOptions, ctx: &TaskCtx) -> Result<TestRep
         }
         completed = pass;
     }
-    let (errors, error_count) = (std::mem::take(&mut tester.errors), tester.error_count);
+    let (mut errors, error_count) = (std::mem::take(&mut tester.errors), tester.error_count);
     drop(tester);
+    // While the buffer is still mapped and locked: physical addresses of the failing words.
+    resolve_physical(&proc_root.join("self/pagemap"), page_size(), &mut errors);
     drop(buf);
 
     let mut details = String::new();
@@ -519,16 +575,51 @@ mod tests {
         t.buf[7] ^= 1 << 3;
         assert!(t.check("solid", |_| 0xAAAA));
         assert_eq!(t.error_count, 1);
+        let base = t.base;
         assert_eq!(
             t.errors[0],
             MemError {
                 pattern: "solid".into(),
                 offset: 56,
+                address: base + 56,
+                physical: None,
                 expected: 0xAAAA,
                 actual: 0xAAA2,
             }
         );
-        assert!(t.errors[0].line().contains("bits 0x0000000000000008"));
+        let line = t.errors[0].line();
+        assert!(line.contains("bits 0x0000000000000008"), "{line}");
+        assert!(line.contains(&format!("virtual 0x{:012x} (offset 0x38)", base + 56)));
+        assert!(line.contains("physical unknown"));
+    }
+
+    #[test]
+    fn physical_addresses_from_pagemap() {
+        // present, PFN 0x1234
+        let e = (1u64 << 63) | 0x1234;
+        assert_eq!(
+            phys_from_pagemap_entry(e, 0x7f00_0000_0123, 4096),
+            Some(0x1234 * 4096 + 0x123)
+        );
+        // not present, or PFN hidden (not root)
+        assert_eq!(phys_from_pagemap_entry(0x1234, 0x1000, 4096), None);
+        assert_eq!(phys_from_pagemap_entry(1 << 63, 0x1000, 4096), None);
+
+        let d = crate::hw::testutil::TempDir::new("pagemap");
+        let mut map = vec![0u8; 8 * 4];
+        map[16..24].copy_from_slice(&((1u64 << 63) | 0x42).to_le_bytes());
+        d.write("pagemap", &map);
+        let mut errs = vec![MemError {
+            pattern: "x".into(),
+            offset: 0,
+            address: 2 * 4096 + 8,
+            physical: None,
+            expected: 0,
+            actual: 1,
+        }];
+        resolve_physical(&d.path().join("pagemap"), 4096, &mut errs);
+        assert_eq!(errs[0].physical, Some(0x42 * 4096 + 8));
+        assert!(errs[0].line().starts_with("x: physical 0x0000042008, virtual"));
     }
 
     #[test]

@@ -12,15 +12,17 @@ use crate::net::{self, NetEnv};
 use crate::tasks::TaskFailure;
 
 pub const USAGE: &str = "\
-  xoros-rescue-shell [--sim <dir>] --cli net show [--json]
+\x20 xoros-rescue-shell [--sim <dir>] --cli net show [--json]
   xoros-rescue-shell [--sim <dir>] --cli net scan <if>
   xoros-rescue-shell [--sim <dir>] --cli net config <if> dhcp|static [<addr>/<prefix>]
                      [--gateway <ip>] [--dns <ip>[,<ip>...]] [--wifi <ssid> [--hidden]
                      [--security open|wpa2|wpa3] [--psk <passphrase>|-] [--country <CC>]]
-                     [--no-apply] [--remember]
-  xoros-rescue-shell [--sim <dir>] --cli net unconfig <if> [--remember]
+                     [--no-apply] [--remember [--store-wpa3-password]]
+  xoros-rescue-shell [--sim <dir>] --cli net unconfig <if> [--remember [--store-wpa3-password]]
   xoros-rescue-shell [--sim <dir>] --cli net list [--remembered]
-  xoros-rescue-shell [--sim <dir>] --cli net remember | forget
+  xoros-rescue-shell [--sim <dir>] --cli net remember [--store-wpa3-password] | forget
+                     (WPA3 passwords cannot be hashed: they are remembered only with
+                     --store-wpa3-password, in clear text on the overlay partition)
   xoros-rescue-shell [--sim <dir>] --cli net export-nm [<if>...]
   xoros-rescue-shell [--sim <dir>] --cli net nm-list
   xoros-rescue-shell [--sim <dir>] --cli net import-nm <file> [--if <if>] [--no-apply] [--remember]
@@ -157,13 +159,16 @@ pub fn parse_config(args: &[String]) -> Result<(ConfigInput, Option<String>), St
     ))
 }
 
-fn remember_now(app: &App, env: &NetEnv) -> Result<String, String> {
+/// Flag: store WPA3-SAE passwords in clear text when remembering (NET-5, explicit consent).
+pub const STORE_WPA3_FLAG: &str = "--store-wpa3-password";
+
+fn remember_now(app: &App, env: &NetEnv, args: &[String]) -> Result<String, String> {
     let state = profile::load_state(env);
-    let p = profile::remember(app.backend.as_ref(), &state)?;
+    let r = profile::remember_with(app.backend.as_ref(), &state, has_flag(args, STORE_WPA3_FLAG))?;
     Ok(format!(
-        "Remembered {} connection(s) in overlay:/{} for the next rescue boot.\n",
+        "{} connection(s): {}",
         state.connections.len(),
-        p.display()
+        r.text()
     ))
 }
 
@@ -186,6 +191,25 @@ fn list_text(cfg: &profile::RescueNetConfig) -> String {
 pub fn net_cmd(app: &App, args: &[String]) -> Option<Result<String, String>> {
     let env = NetEnv::for_backend(app.backend.as_ref());
     let rest = args.get(1..).unwrap_or(&[]);
+    const S: &str = STORE_WPA3_FLAG;
+    // Allowed options per command (values, flags, positional words): a typo is an error.
+    let (values, flags, pos): (&[&str], &[&str], bool) = match args.first().map(String::as_str)? {
+        "show" => (&[], &["--json"], false),
+        "scan" | "export-nm" => (&[], &[], true),
+        "config" => (
+            &["--gateway", "--dns", "--wifi", "--security", "--psk", "--country"],
+            &["--hidden", "--no-apply", "--remember", S],
+            true,
+        ),
+        "unconfig" => (&[], &["--remember", S], true),
+        "list" => (&[], &["--remembered"], false),
+        "remember" => (&[], &[S], false),
+        "import-nm" => (&["--if"], &["--no-apply", "--remember", S], true),
+        _ => (&[], &[], false),
+    };
+    if let Err(e) = crate::cli::check_test_args(rest, values, flags, pos) {
+        return Some(Err(e));
+    }
     let r = match args.first().map(String::as_str)? {
         "show" => {
             let d = net::details::collect(&env);
@@ -215,7 +239,7 @@ pub fn net_cmd(app: &App, args: &[String]) -> Option<Result<String, String>> {
             let rep = profile::configure(&env, c, country, apply).map_err(|e| e.to_string())?;
             let mut t = rep.text();
             if has_flag(rest, "--remember") {
-                t.push_str(&remember_now(app, &env)?);
+                t.push_str(&remember_now(app, &env, rest)?);
             }
             Ok(t)
         })(),
@@ -231,7 +255,7 @@ pub fn net_cmd(app: &App, args: &[String]) -> Option<Result<String, String>> {
                 format!("{ifname} had no configuration; its files were cleaned up.\n")
             };
             if has_flag(rest, "--remember") {
-                t.push_str(&remember_now(app, &env)?);
+                t.push_str(&remember_now(app, &env, rest)?);
             }
             Ok(t)
         })(),
@@ -249,7 +273,7 @@ pub fn net_cmd(app: &App, args: &[String]) -> Option<Result<String, String>> {
             if profile::load_state(&env).connections.is_empty() {
                 Err("No network configuration to remember (use 'net config' first).".into())
             } else {
-                remember_now(app, &env)
+                remember_now(app, &env, rest)
             }
         }
         "forget" => profile::forget(app.backend.as_ref()).map(|found| {
@@ -314,7 +338,7 @@ pub fn net_cmd(app: &App, args: &[String]) -> Option<Result<String, String>> {
                 .map_err(|e| e.to_string())?;
             let mut t = rep.text();
             if has_flag(rest, "--remember") {
-                t.push_str(&remember_now(app, &env)?);
+                t.push_str(&remember_now(app, &env, rest)?);
             }
             Ok(t)
         })(),
@@ -342,6 +366,7 @@ pub fn import_as(
 
 /// `--cli report [--json] [--stick <id>]` (SYS-5).
 pub fn report_cmd(app: &App, args: &[String]) -> Result<String, String> {
+    crate::cli::check_test_args(args, &["--stick"], &["--json"], false)?;
     if let Some(id) = opt_value(args, "--stick") {
         let stick = find_stick(app, &id)?;
         let names = diagnostics::save_report(app, &stick).map_err(task_err)?;
@@ -360,6 +385,10 @@ pub fn report_cmd(app: &App, args: &[String]) -> Result<String, String> {
 
 /// `--cli diag <stick>` (LOG-2).
 pub fn diag_cmd(app: &App, args: &[String]) -> Result<String, String> {
+    crate::cli::check_test_args(args, &[], &[], true)?;
+    if positional(args).len() > 1 {
+        return Err("diag: give one stick.".into());
+    }
     let id = positional(args)
         .first()
         .copied()
@@ -392,6 +421,13 @@ pub fn keys_from_stick(app: &App, stick: &Stick) -> Result<String, String> {
 /// `--cli ssh start | stop | status | add-keys <stick>|<file>` (SSH-1).
 pub fn ssh_cmd(app: &App, args: &[String]) -> Result<String, String> {
     let env = NetEnv::for_backend(app.backend.as_ref());
+    let extra = match args.first().map(String::as_str) {
+        Some("add-keys") => 2,
+        _ => 1,
+    };
+    if let Some(a) = args.get(extra) {
+        return Err(format!("Unknown argument '{a}'."));
+    }
     match args.first().map(String::as_str) {
         Some("start") => net::ssh::start(&env)
             .map(|s| s.text())
@@ -493,7 +529,7 @@ mod tests {
             "--remember",
         ])
         .unwrap();
-        assert!(out.contains("Remembered 1 connection"), "{out}");
+        assert!(out.contains("1 connection(s): Remembered in overlay:/rescue/network.json"), "{out}");
         assert!(run(&["list"])
             .unwrap()
             .contains("eth0: ethernet, static 10.0.2.50/24"));
@@ -509,6 +545,13 @@ mod tests {
             .unwrap()
             .contains("address1=10.0.2.50/24,10.0.2.2"));
         assert!(run(&["export-nm", "wlan9"]).is_err());
+        assert!(run(&["show", "--jsn"]).is_err());
+        assert!(run(&["list", "--remember"]).is_err());
+        assert!(run(&["config", "eth0", "dhcp", "--gw", "1.2.3.4"]).is_err());
+        assert!(run(&["remember", "--store-wpa3"]).is_err());
+        assert!(report_cmd(&app, &a(&["--stik", "usb1"])).is_err());
+        assert!(diag_cmd(&app, &a(&["usb1", "usb2"])).is_err());
+        assert!(ssh_cmd(&app, &a(&["status", "now"])).is_err());
         let out = run(&["nm-list"]).unwrap();
         assert!(out.contains("xoros-eth0.nmconnection [overlay]"), "{out}");
         assert!(

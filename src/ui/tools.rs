@@ -239,7 +239,7 @@ fn ssh_action(s: &mut Cursive, start: bool) {
             if start {
                 ctx.set_message("Starting sshd");
                 let r = crate::net::ssh::start(&env)?;
-                crate::ui::mark_ssh_started();
+                crate::ui::mark_ssh_started(app);
                 Ok(r.text())
             } else {
                 ctx.set_message("Stopping sshd");

@@ -21,7 +21,6 @@ use xoros_core::manifest::{Image, Target};
 
 use super::{worst, Outcome, TestReport, MAX_DETAIL_LINES};
 use crate::backend::{BuildInfo, ErrorKind, PartRole, Slot, SystemBackend};
-use crate::constants::{DEFAULT_HTTP_PROXY, DEFAULT_OTA_BASE_URL};
 use crate::slots::RescueCheck;
 use crate::tasks::{format_bytes, lock, TaskCtx, TaskFailure};
 use crate::update_jobs::{self, Origin, StickItem};
@@ -359,10 +358,11 @@ fn find_manifest_image(
             match Suffix::from_str(&info.suffix) {
                 Ok(suffix) => {
                     ctx.set_message("Fetching the manifest from the OTA server");
+                    let cfg = crate::settings::current();
                     let origin = Origin::Network {
-                        base_url: DEFAULT_OTA_BASE_URL.to_string(),
+                        base_url: cfg.ota_base_url,
                         target: Target::new(info.version.clone(), info.machine.clone(), suffix),
-                        proxy: Some(DEFAULT_HTTP_PROXY.to_string()).filter(|p| !p.is_empty()),
+                        proxy: Some(cfg.http_proxy).filter(|p| !p.is_empty()),
                     };
                     if let Some(found) = try_origin(origin, &mut notes)? {
                         return Ok(Ok(found));

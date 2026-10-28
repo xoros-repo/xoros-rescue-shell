@@ -758,7 +758,37 @@ impl SystemBackend for SimBackend {
         log::info!("SIM: {slot} build info recorded");
         self.store(&s)
     }
+
+    fn read_boot_file(&self, rel: &str) -> Result<Option<String>> {
+        let path = self.boot_dir().join(rel.trim_start_matches('/'));
+        match fs::read_to_string(&path) {
+            Ok(t) => Ok(Some(t)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(BackendError::io(path.display(), e)),
+        }
+    }
+
+    /// `<dir>/stickdisks/<disk>.img`, created with [`SIM_STICK_TEST_BYTES`] if missing (the
+    /// simulated stick's real size would take too long to write).
+    fn stick_test_target(&self, disk: &str) -> Result<(PathBuf, u64)> {
+        let s = self.load()?;
+        Self::check_fail(&s, "stick_test_target")?;
+        super::check_stick_test_disk(&s.disks, disk)?;
+        let path = self.dir.join("stickdisks").join(format!("{disk}.img"));
+        let io = |e| BackendError::io(path.display(), e);
+        if !path.exists() {
+            fs::create_dir_all(self.dir.join("stickdisks")).map_err(io)?;
+            fs::File::create(&path)
+                .and_then(|f| f.set_len(SIM_STICK_TEST_BYTES))
+                .map_err(io)?;
+        }
+        let len = fs::metadata(&path).map_err(io)?.len();
+        Ok((path, len))
+    }
 }
+
+/// Size of the image file the simulation's stick test writes (TST-8).
+pub const SIM_STICK_TEST_BYTES: u64 = 32 * 1024 * 1024;
 
 fn example_build(suffix: &str, ts: &str) -> BuildInfo {
     BuildInfo {

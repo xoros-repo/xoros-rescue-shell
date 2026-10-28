@@ -1,5 +1,7 @@
 //! Application log (LOG-3): `<run dir>/rescue-shell.log`, stderr (journal) when stderr is not
 //! the terminal the TUI draws on, and an in-memory ring buffer for the log viewer (LOG-1).
+//! When stderr is not used (the TUI on tty1, CLI runs), records go to the journal through its
+//! native socket instead, on the device only (not in simulation mode).
 
 use std::collections::VecDeque;
 use std::fs::{self, File, OpenOptions};
@@ -15,7 +17,33 @@ struct AppLogger {
     path: Option<PathBuf>,
     ring: Mutex<VecDeque<String>>,
     to_stderr: bool,
+    /// The journal's native socket, if records go there.
+    journal: Option<std::os::unix::net::UnixDatagram>,
     level: log::LevelFilter,
+}
+
+/// systemd-journald's native protocol socket.
+const JOURNAL_SOCKET: &str = "/run/systemd/journal/socket";
+
+/// One journal entry in the native protocol: `KEY=value` lines; a value with a newline is sent
+/// as `KEY\n<64-bit little-endian length><value>\n`.
+pub fn journal_datagram(level: log::Level, message: &str) -> Vec<u8> {
+    let priority = match level {
+        log::Level::Error => 3,
+        log::Level::Warn => 4,
+        log::Level::Info => 6,
+        log::Level::Debug | log::Level::Trace => 7,
+    };
+    let mut d = format!("PRIORITY={priority}\nSYSLOG_IDENTIFIER=xoros-rescue-shell\n").into_bytes();
+    if message.contains('\n') {
+        d.extend_from_slice(b"MESSAGE\n");
+        d.extend_from_slice(&(message.len() as u64).to_le_bytes());
+        d.extend_from_slice(message.as_bytes());
+        d.push(b'\n');
+    } else {
+        d.extend_from_slice(format!("MESSAGE={message}\n").as_bytes());
+    }
+    d
 }
 
 static LOGGER: OnceLock<AppLogger> = OnceLock::new();
@@ -43,6 +71,10 @@ impl log::Log for AppLogger {
         );
         if let Some(f) = lock(&self.file).as_mut() {
             let _ = writeln!(f, "{line}");
+        }
+        if let Some(j) = &self.journal {
+            let msg = format!("{}{}", origin(record.target()), record.args());
+            let _ = j.send_to(&journal_datagram(record.level(), &msg), JOURNAL_SOCKET);
         }
         if self.to_stderr {
             let _ = writeln!(
@@ -85,11 +117,19 @@ pub fn init(run_dir: &Path, level: log::LevelFilter, allow_stderr: bool) -> Opti
     let file = fs::create_dir_all(run_dir)
         .and_then(|_| OpenOptions::new().create(true).append(true).open(&path))
         .ok();
+    let to_stderr = allow_stderr && !stderr_is_tty();
+    // On the device only (the run directory is the real one, not a simulation's).
+    let journal = (!to_stderr
+        && run_dir == Path::new(crate::constants::RUN_DIR)
+        && Path::new(JOURNAL_SOCKET).exists())
+    .then(std::os::unix::net::UnixDatagram::unbound)
+    .and_then(Result::ok);
     let logger = AppLogger {
         path: file.as_ref().map(|_| path.clone()),
         file: Mutex::new(file),
         ring: Mutex::new(VecDeque::new()),
-        to_stderr: allow_stderr && !stderr_is_tty(),
+        to_stderr,
+        journal,
         level,
     };
     if LOGGER.set(logger).is_err() {
@@ -123,6 +163,20 @@ pub fn last_line() -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn journal_entries() {
+        let d = super::journal_datagram(log::Level::Warn, "TST-8: overwriting /dev/sdb");
+        assert_eq!(
+            String::from_utf8(d).unwrap(),
+            "PRIORITY=4\nSYSLOG_IDENTIFIER=xoros-rescue-shell\nMESSAGE=TST-8: overwriting /dev/sdb\n"
+        );
+        let d = super::journal_datagram(log::Level::Info, "a\nb");
+        let head = b"PRIORITY=6\nSYSLOG_IDENTIFIER=xoros-rescue-shell\nMESSAGE\n";
+        assert_eq!(&d[..head.len()], head);
+        assert_eq!(&d[head.len()..head.len() + 8], &3u64.to_le_bytes());
+        assert_eq!(&d[head.len() + 8..], b"a\nb\n");
+    }
+
     #[test]
     fn origin_marks_other_crates() {
         assert_eq!(super::origin("xoros_rescue_shell::backup_jobs"), "");

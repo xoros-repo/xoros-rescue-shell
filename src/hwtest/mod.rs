@@ -1,5 +1,7 @@
-//! Hardware and integrity tests (TST-*): memory test (TST-1), disk read test (TST-3), slot
-//! integrity (TST-4), rescue integrity (TST-5) and file system check (TST-6).
+//! Hardware and integrity tests (TST-*): memory test (TST-1), reboot into memtest86+ (TST-2),
+//! disk read test (TST-3), slot integrity (TST-4), rescue integrity (TST-5), file system check
+//! (TST-6), disk health (TST-7), the destructive stick test (TST-8) and the CPU stress test
+//! (TST-9).
 //!
 //! Every test runs inside a [`TaskRunner`](crate::tasks::TaskRunner) worker (progress and
 //! cancel, UI-3) through [`run_recorded`], which turns the outcome into a [`TestResult`]
@@ -9,8 +11,12 @@
 
 pub mod diskread;
 pub mod fsck;
+pub mod health;
 pub mod memtest;
+pub mod memtest86;
 pub mod slotcheck;
+pub mod sticktest;
+pub mod stress;
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -46,6 +52,14 @@ pub enum TestKind {
     FsCheck,
     /// TST-6, `e2fsck -f -y`.
     FsRepair,
+    /// TST-7.
+    DiskHealth,
+    /// TST-8.
+    StickTest,
+    /// TST-9.
+    CpuStress,
+    /// NET-4 (P2): download speed of one OTA chunk.
+    NetSpeed,
 }
 
 impl TestKind {
@@ -57,6 +71,10 @@ impl TestKind {
             TestKind::RescueIntegrity => "Rescue integrity",
             TestKind::FsCheck => "File system check",
             TestKind::FsRepair => "File system repair",
+            TestKind::DiskHealth => "Disk health",
+            TestKind::StickTest => "Stick write test",
+            TestKind::CpuStress => "CPU stress test",
+            TestKind::NetSpeed => "Network speed test",
         }
     }
 
@@ -68,6 +86,10 @@ impl TestKind {
             TestKind::SlotIntegrity => "TST-4",
             TestKind::RescueIntegrity => "TST-5",
             TestKind::FsCheck | TestKind::FsRepair => "TST-6",
+            TestKind::DiskHealth => "TST-7",
+            TestKind::StickTest => "TST-8",
+            TestKind::CpuStress => "TST-9",
+            TestKind::NetSpeed => "NET-4",
         }
     }
 
@@ -80,6 +102,10 @@ impl TestKind {
             TestKind::RescueIntegrity => "rescue.txt",
             TestKind::FsCheck => "fsck.txt",
             TestKind::FsRepair => "fsck-repair.txt",
+            TestKind::DiskHealth => "disk-health.txt",
+            TestKind::StickTest => "stick-test.txt",
+            TestKind::CpuStress => "cpu-stress.txt",
+            TestKind::NetSpeed => "net-speed.txt",
         }
     }
 }
@@ -339,6 +365,12 @@ pub enum TestRequest {
     Slots(slotcheck::SlotTestOptions),
     Rescue,
     Fsck(fsck::FsckRequest),
+    /// Disk health of these disks (kernel names; all when empty).
+    Health(Vec<String>),
+    /// Destructive write/read-back test of an external disk.
+    Stick(sticktest::StickTestRequest),
+    Stress(stress::StressOptions),
+    NetSpeed(crate::net::speed::SpeedOptions),
 }
 
 impl TestRequest {
@@ -350,13 +382,18 @@ impl TestRequest {
             TestRequest::Rescue => TestKind::RescueIntegrity,
             TestRequest::Fsck(r) if r.repair => TestKind::FsRepair,
             TestRequest::Fsck(_) => TestKind::FsCheck,
+            TestRequest::Health(_) => TestKind::DiskHealth,
+            TestRequest::Stick(_) => TestKind::StickTest,
+            TestRequest::Stress(_) => TestKind::CpuStress,
+            TestRequest::NetSpeed(_) => TestKind::NetSpeed,
         }
     }
 
     /// e2fsck runs as a write task: nothing else may use the partitions meanwhile (UI-3).
     pub fn task_kind(&self) -> TaskKind {
         match self {
-            TestRequest::Fsck(_) => TaskKind::Write,
+            // The stick test is destructive: one write operation at a time (UI-3).
+            TestRequest::Fsck(_) | TestRequest::Stick(_) => TaskKind::Write,
             _ => TaskKind::ReadOnly,
         }
     }
@@ -445,6 +482,27 @@ pub fn run_request(env: &TestEnv, req: &TestRequest, ctx: &TaskCtx) -> TestResul
                 .collect::<Vec<_>>()
                 .join(" + ");
             run_recorded(store, kind, &target, ctx, |ctx| fsck::run(backend, r, ctx))
+        }
+        TestRequest::Health(disks) => {
+            let target = if disks.is_empty() {
+                "all disks".to_string()
+            } else {
+                disks.join(" + ")
+            };
+            run_recorded(store, kind, &target, ctx, |ctx| health::run(backend, disks, ctx))
+        }
+        TestRequest::Stick(r) => run_recorded(store, kind, &r.disk, ctx, |ctx| {
+            sticktest::run(backend, r, ctx)
+        }),
+        TestRequest::Stress(o) => {
+            let paths = backend.host_paths();
+            run_recorded(store, kind, "CPU", ctx, |ctx| stress::run(&paths, o, ctx))
+        }
+        TestRequest::NetSpeed(o) => {
+            let env = crate::net::NetEnv::for_backend(backend);
+            run_recorded(store, kind, &o.base_url, ctx, |ctx| {
+                crate::net::speed::run(backend, &env, o, ctx)
+            })
         }
     }
 }

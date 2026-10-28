@@ -163,3 +163,40 @@ the device is changed.";
 
 pub const DOWNGRADE_CONFIRM: &str = "The selected build is the SAME or OLDER than the build \
 installed in the target slot. Install it anyway (downgrade)?";
+
+// --- shell-b: TST-2, TST-7, TST-8, TST-9, NET-4 speed test, NET-5 WPA3 ---
+
+pub const TITLE_MEMTEST86: &str = "Reboot into memtest86+";
+
+pub const MEMTEST86_MISSING: &str = "This device has no memtest86+ boot entry (GRUB menu id \
+MENU_MEMTEST). It is only installed on x86 images; use Tests -> Memory test instead.";
+
+pub const MEMTEST86_CONFIRM: &str = "Reboot into memtest86+ now? It tests all memory, \
+including the memory the kernel uses here, and runs until you stop it. Then switch the device \
+off or press Esc in memtest86+ to reboot; the next boot is a normal one.";
+
+pub const TITLE_HEALTH: &str = "Disk health";
+
+pub const HEALTH_INTRO: &str = "Reads the SMART / NVMe health data (smartctl, nvme-cli or \
+the NVMe log page) and what sysfs offers (eMMC wear, I/O error counters). Nothing is written. \
+USB sticks and SD cards usually have no SMART data.";
+
+pub const TITLE_STICKTEST: &str = "Stick write test (destructive)";
+
+pub const STICKTEST_INTRO: &str = "Writes a test pattern over the WHOLE selected stick and \
+reads it back: finds fake-capacity sticks and bad areas. Everything on the stick is \
+destroyed. The boot disk is never offered.";
+
+pub const STICKTEST_AFTER: &str = "The stick now has no partition table or file system: \
+create them again before using it (e.g. on a PC).";
+
+pub const TITLE_STRESS: &str = "CPU stress test";
+
+pub const STRESS_INTRO: &str = "Loads all CPU cores with a self-checking computation and \
+samples the temperature and (Raspberry Pi) the throttling and under-voltage flags. Wrong \
+results, under-voltage, throttling or temperatures from 85 C are reported.";
+
+pub const NET_SAE_STORE_QUESTION: &str = "WPA3 (SAE) cannot store a hash of the password \
+like WPA2 does: remembering it means storing the password in CLEAR TEXT on the overlay \
+partition (file mode 0600). Anyone with access to the disk can read it. Without it, the \
+network is remembered without password and you enter it again after the next rescue boot.";

@@ -6,7 +6,7 @@
 //! - [`dns`]: a stub resolver with an explicit server list, [`http`]: the app's HTTP client and
 //!   OTA image source using it;
 //! - [`sntp`] and [`time`]: time sync and manual time setting;
-//! - [`diag`]: the network test;
+//! - [`diag`]: the network test, [`speed`]: the download speed test (NET-4 P2);
 //! - [`profile`]: per-interface configuration (DHCP/static, Wi-Fi via [`wifi`]) and the
 //!   remembered configuration (NET-2, NET-5);
 //! - [`nm`]: NetworkManager keyfiles for the normal system (NET-6, NET-8);
@@ -27,6 +27,7 @@ pub mod info;
 pub mod nm;
 pub mod profile;
 pub mod sntp;
+pub mod speed;
 pub mod ssh;
 pub mod time;
 pub mod wifi;

@@ -1,5 +1,8 @@
 //! Remote support over SSH (SSH-1): start `sshd` on demand with a one-time root password,
-//! stop it on demand and when the TUI exits.
+//! stop it on demand and when the TUI exits. A TUI start leaves a marker file, so the next
+//! TUI instance also stops an sshd whose TUI crashed or was killed (systemd restarts the app),
+//! and a stale `/etc/shadow` bind mount (whose password would also work on the console) is
+//! removed. An sshd started with the CLI is left running.
 //!
 //! Everything lives in `<run dir>/ssh/`: a dedicated `sshd_config` (password login for root,
 //! `AuthorizedKeysFile` in the same directory, which the user can fill from a stick), an
@@ -32,6 +35,46 @@ fn pid_file(env: &NetEnv) -> PathBuf {
 
 fn shadow_copy(env: &NetEnv) -> PathBuf {
     ssh_dir(env).join("shadow")
+}
+
+/// Marker with the pid of the TUI that started sshd (stop it when that TUI exits).
+fn tui_marker(env: &NetEnv) -> PathBuf {
+    ssh_dir(env).join("started-by-tui")
+}
+
+/// Record that this TUI process started sshd (SSH-1: stopped when the app exits).
+pub fn mark_started_by_tui(env: &NetEnv) -> io::Result<()> {
+    mark_started_by(env, std::process::id())
+}
+
+fn mark_started_by(env: &NetEnv, pid: u32) -> io::Result<()> {
+    config::write_file(&tui_marker(env), &format!("{pid}\n"), 0o600)
+}
+
+/// SSH-1 when a TUI starts or exits: stop an sshd started by this TUI process or by a TUI
+/// that no longer runs (crashed, killed), and remove a stale `/etc/shadow` bind mount. An
+/// sshd of another running TUI (e.g. one a supporter started over SSH) is left alone.
+/// Returns a log line if something was done.
+pub fn stop_tui_owned(env: &NetEnv) -> Option<String> {
+    let owner = fs::read_to_string(tui_marker(env))
+        .ok()
+        .map(|t| t.trim().parse::<u32>().unwrap_or(0));
+    let owned = owner.is_some_and(|pid| {
+        // SAFETY: signal 0 only checks that the process exists.
+        let alive = pid > 1 && unsafe { libc::kill(pid as libc::pid_t, 0) } == 0;
+        pid == std::process::id() || !alive
+    });
+    let stale = running_pid(env).is_none() && (shadow_mounted(env) || pid_file(env).exists());
+    if !owned && !stale {
+        return None;
+    }
+    let r = stop(env);
+    let _ = fs::remove_file(tui_marker(env));
+    Some(match r {
+        Ok(true) => "SSH-1: sshd started from the TUI stopped".to_string(),
+        Ok(false) => "SSH-1: stale sshd state cleaned up".to_string(),
+        Err(e) => format!("SSH-1: stopping sshd: {e}"),
+    })
 }
 
 pub fn authorized_keys(env: &NetEnv) -> PathBuf {
@@ -259,6 +302,8 @@ pub fn start(env: &NetEnv) -> io::Result<SshStarted> {
         }
     }
     stop(env)?;
+    // Owned by whoever started it last; the TUI marks it again after this returns.
+    let _ = fs::remove_file(tui_marker(env));
     // The image's own socket-activated sshd would hold port 22 (it uses /etc and the locked
     // root account): stop it while remote support runs.
     if let Some(Ok(state)) = env.query_tool("systemctl", &["is-active", "sshd.socket"]) {
@@ -338,6 +383,7 @@ pub fn stop(env: &NetEnv) -> io::Result<bool> {
         log::info!("SSH-1: sshd stopped");
     }
     let _ = fs::remove_file(pid_file(env));
+    let _ = fs::remove_file(tui_marker(env));
     if !env.simulation && shadow_mounted(env) {
         cmd::run_logged("umount", &[SHADOW]).map_err(super::wifi::tool_io)?;
     }
@@ -455,5 +501,27 @@ mod tests {
         assert!(stop(&e).unwrap());
         assert!(!status(&e).running);
         assert!(!stop(&e).unwrap());
+
+        // Started from this TUI: stopped when it exits.
+        start(&e).unwrap();
+        mark_started_by_tui(&e).unwrap();
+        assert!(stop_tui_owned(&e).unwrap().contains("stopped"));
+        // Started from another TUI that still runs (our parent stands for it): left alone;
+        // from a TUI that died (no such pid): stopped by the next TUI.
+        start(&e).unwrap();
+        // SAFETY: no arguments.
+        mark_started_by(&e, unsafe { libc::getppid() } as u32).unwrap();
+        assert_eq!(stop_tui_owned(&e), None);
+        mark_started_by(&e, 0x3fff_fff0).unwrap();
+        assert!(stop_tui_owned(&e).unwrap().contains("stopped"));
+        assert!(!status(&e).running);
+        assert_eq!(stop_tui_owned(&e), None);
+        start(&e).unwrap();
+        assert_eq!(stop_tui_owned(&e), None);
+        assert!(status(&e).running);
+        mark_started_by_tui(&e).unwrap();
+        start(&e).unwrap(); // a CLI restart takes it over
+        assert_eq!(stop_tui_owned(&e), None);
+        assert!(stop(&e).unwrap());
     }
 }

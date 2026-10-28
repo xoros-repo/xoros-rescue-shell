@@ -85,7 +85,7 @@ Usage:
   xoros-rescue-shell [--sim <dir>] --cli test disk [--device disk|<partition label>|<kernel name>]
   xoros-rescue-shell [--sim <dir>] --cli test fsck [overlay] [application] [--repair --confirm REPAIR]
   xoros-rescue-shell [--sim <dir>] --cli test results [--json]
-{}{}  xoros-rescue-shell --sim-init <dir>               create an example simulation dir
+{}{}{}  xoros-rescue-shell --sim-init <dir>               create an example simulation dir
   xoros-rescue-shell --help | --version
 
 Options:
@@ -107,6 +107,7 @@ Exit codes:
   2  the command line could not be parsed
   3  a test ran and found a problem (FAIL)
 ",
+        crate::cli_tests::USAGE,
         crate::cli_net::USAGE,
         crate::cli_admin::USAGE
     )
@@ -253,7 +254,7 @@ fn run_cli_job<T: Send + 'static>(
 }
 
 /// Run a job in a task of `kind`, printing progress to stderr.
-fn run_cli_task<T: Send + 'static>(
+pub(crate) fn run_cli_task<T: Send + 'static>(
     app: &App,
     name: &str,
     kind: TaskKind,
@@ -615,6 +616,11 @@ fn update_cmd(app: &App, args: &[String]) -> Result<String, String> {
 fn net_cmd(app: &App, args: &[String]) -> Result<String, String> {
     let env = net::NetEnv::for_backend(app.backend.as_ref());
     match args.first().map(String::as_str) {
+        Some("up" | "dns") => check_options(&args[1..], &[], &[])?,
+        Some("test") => check_options(&args[1..], &["--base", "--proxy"], &[])?,
+        _ => {}
+    }
+    match args.first().map(String::as_str) {
         Some("up") => {
             let rep = net::config::bring_up_ethernet(&env).map_err(|e| e.to_string())?;
             let mut t = rep.text();
@@ -638,7 +644,7 @@ fn net_cmd(app: &App, args: &[String]) -> Result<String, String> {
             let dev = update_jobs::device_target(app.backend.as_ref());
             let base = opt_value(args, "--base").unwrap_or_else(|| crate::settings::current().ota_base_url);
             let url = match &dev.target {
-                Some(t) => format!("{}/manifest.json", net::http::ota_dir_url(&base, t)),
+                Some(t) => xoros_core::source::ota_url(&base, t, "manifest.json"),
                 None => base.clone(),
             };
             let opts = net::diag::TestOptions {
@@ -659,8 +665,9 @@ fn net_cmd(app: &App, args: &[String]) -> Result<String, String> {
                 Ok(text)
             }
         }
+        Some("speed") => crate::cli_tests::net_speed(app, &args[1..]),
         _ => crate::cli_net::net_cmd(app, args).unwrap_or_else(|| {
-            Err("net needs: up | dns | test | show | scan | config | unconfig | list | \
+            Err("net needs: up | dns | test | speed | show | scan | config | unconfig | list | \
                  remember | forget | export-nm | nm-list | import-nm."
                 .into())
         }),
@@ -690,6 +697,27 @@ fn time_cmd(app: &App, args: &[String]) -> Result<String, String> {
     }
 }
 
+/// Like [`check_options`], for `--cli test` sub-commands; words without `--` are allowed
+/// only when the sub-command takes positional arguments.
+pub(crate) fn check_test_args(
+    args: &[String],
+    values: &[&str],
+    flags: &[&str],
+    positional: bool,
+) -> Result<(), String> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if values.contains(&a.as_str()) {
+            if it.next().is_none() {
+                return Err(format!("{a} needs a value."));
+            }
+        } else if !(flags.contains(&a.as_str()) || positional && !a.starts_with('-')) {
+            return Err(format!("Unknown argument '{a}'."));
+        }
+    }
+    Ok(())
+}
+
 /// `--cli test ...` (TST-*): parse into a request.
 fn test_request(app: &App, args: &[String]) -> Result<Option<hwtest::TestRequest>, String> {
     use hwtest::{fsck::FsckRequest, memtest, slotcheck, TestRequest};
@@ -713,6 +741,26 @@ fn test_request(app: &App, args: &[String]) -> Result<Option<hwtest::TestRequest
         }
         out
     };
+    let rest = args.get(1..).unwrap_or(&[]);
+    match args.first().map(String::as_str) {
+        Some("results") => check_test_args(rest, &[], &["--json"], false)?,
+        Some("rescue") => check_test_args(rest, &[], &[], false)?,
+        Some("memory") => check_test_args(rest, &["--percent", "--passes"], &[], false)?,
+        Some("disk") => check_test_args(rest, &["--device"], &[], false)?,
+        Some("slots") => check_test_args(
+            rest,
+            &[SOURCE_OPTIONS, &["--manifest"]].concat(),
+            &["--no-files"],
+            true,
+        )?,
+        Some("fsck") => check_test_args(rest, &["--confirm"], &["--repair"], true)?,
+        Some(w) => {
+            if let Some(r) = crate::cli_tests::test_request(app, w, rest) {
+                return r.map(Some);
+            }
+        }
+        None => {}
+    }
     Ok(Some(match args.first().map(String::as_str) {
         Some("results") => return Ok(None),
         Some("rescue") => TestRequest::Rescue,
@@ -788,7 +836,9 @@ fn test_request(app: &App, args: &[String]) -> Result<Option<hwtest::TestRequest
         }
         _ => {
             return Err(
-                "test needs: slots | rescue | memory | disk | fsck | results.".into(),
+                "test needs: slots | rescue | memory | memtest86 | disk | fsck | health | stick | stress | \
+                 results."
+                    .into(),
             )
         }
     }))
@@ -797,6 +847,9 @@ fn test_request(app: &App, args: &[String]) -> Result<Option<hwtest::TestRequest
 /// `--cli test ...`; prints the result and returns the exit code of its outcome (0 pass or
 /// warning, 3 fail, 1 error/cancelled).
 pub fn run_test(app: &App, args: &[String]) -> i32 {
+    if let Some(code) = crate::cli_tests::run_test_command(app, args) {
+        return code;
+    }
     let req = match test_request(app, args) {
         Ok(Some(r)) => r,
         Ok(None) => {
@@ -1018,5 +1071,14 @@ mod tests {
             other => panic!("{other:?}"),
         }
         assert!(req(&["bogus"]).is_err());
+        // Unknown arguments are rejected (a typo must not run a different test).
+        assert!(req(&["rescue", "--fast"]).is_err());
+        assert!(req(&["memory", "--percnt", "50"]).is_err());
+        assert!(req(&["memory", "--percent"]).is_err());
+        assert!(req(&["disk", "sda"]).is_err());
+        assert!(req(&["slots", "A", "--no-file"]).is_err());
+        assert!(req(&["fsck", "overlay", "--repiar"]).is_err());
+        assert_eq!(req(&["results", "--json"]), Ok(None));
+        assert!(req(&["results", "--jsn"]).is_err());
     }
 }
