@@ -38,6 +38,9 @@ pub const OS_RELEASE: &str = "/etc/os-release";
 /// fbcon rotation file for the running console (ROT-1), relative to the sysfs root.
 pub const FBCON_ROTATE_ALL: &str = "class/graphics/fbcon/rotate_all";
 
+/// Rotation of the foreground console, read back after writing [`FBCON_ROTATE_ALL`] (ROT-1).
+pub const FBCON_ROTATE: &str = "class/graphics/fbcon/rotate";
+
 /// Number of lines kept in the in-memory log buffer (LOG-1).
 pub const LOG_RING_LINES: usize = 2000;
 

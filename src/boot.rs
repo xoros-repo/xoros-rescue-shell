@@ -2,7 +2,7 @@
 //! grubenv access is the backend's.
 
 use crate::backend::{BootTarget, Result, Slot, SystemBackend};
-use crate::constants::FBCON_ROTATE_ALL;
+use crate::constants::{FBCON_ROTATE, FBCON_ROTATE_ALL};
 
 /// Run a state-changing action and log it with its result (LOG-3).
 pub fn logged<T>(what: &str, f: impl FnOnce() -> Result<T>) -> Result<T> {
@@ -64,10 +64,22 @@ pub fn set_rotation(b: &dyn SystemBackend, rotation: u8) -> Result<String> {
         return Ok("Simulation: console rotation not changed.".into());
     }
     match std::fs::write(&path, format!("{rotation}\n")) {
-        Ok(()) => {
-            log::info!("console rotation set to {rotation}");
-            Ok("Applied to the console now.".into())
-        }
+        // Without CONFIG_FRAMEBUFFER_CONSOLE_ROTATION the write succeeds but changes nothing:
+        // check the foreground console's rotation.
+        Ok(()) => match std::fs::read_to_string(b.host_paths().sys_root.join(FBCON_ROTATE)) {
+            Ok(now) if now.trim() == rotation.to_string() => {
+                log::info!("console rotation set to {rotation}");
+                Ok("Applied to the console now.".into())
+            }
+            Ok(now) => {
+                log::warn!("console rotation is still {} after writing {rotation}", now.trim());
+                Ok("Applied on next boot (this kernel cannot rotate the running console).".into())
+            }
+            Err(e) => {
+                log::warn!("cannot read back the console rotation: {e}");
+                Ok("Applied on next boot.".into())
+            }
+        },
         Err(e) => {
             log::warn!("cannot apply console rotation: {e}");
             Ok(format!("Applied on next boot (console: {e})."))
