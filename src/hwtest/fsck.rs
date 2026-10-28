@@ -2,7 +2,7 @@
 //! `e2fsck -f -n` (check only) and, after typed confirmation, `e2fsck -f -y` (repair). The
 //! partitions must not be mounted: the rescue shell's own mounts are released first
 //! ([`SystemBackend::release_partition`]); a mount elsewhere (e.g. from the subshell) refuses
-//! the check. The e2fsck output is shown.
+//! the check. The e2fsck output is shown. Cancel stops the running e2fsck.
 
 use std::fmt::Write as _;
 
@@ -95,7 +95,15 @@ pub fn run(
         if req.repair {
             log::warn!("TST-6: repairing {label}: {cmd}");
         }
-        match runner.run("e2fsck", &a) {
+        // Cancel kills the running e2fsck (TST-6), not only the next partition.
+        let ran = runner.run_cancellable("e2fsck", &a, ctx.cancel_token());
+        if ctx.is_cancelled() {
+            if req.repair {
+                log::warn!("TST-6: repair of {label} interrupted; check the file system again");
+            }
+            return Err(TaskFailure::Cancelled);
+        }
+        match ran {
             Ok(out) => {
                 let (o, what) = interpret(out.code, req.repair);
                 outcome = worst(outcome, o);

@@ -52,6 +52,19 @@ impl std::error::Error for ToolError {}
 /// Runs external programs. Implemented by [`SystemRunner`]; tests use a fake.
 pub trait CommandRunner {
     fn run(&self, program: &str, args: &[&str]) -> Result<CommandOutput, ToolError>;
+
+    /// Like [`CommandRunner::run`], but the program is killed when `cancel` is set (TST-6:
+    /// cancelling a running e2fsck). The output then has no exit code (`code: None`). Runners
+    /// that finish immediately (simulation, tests) keep the default.
+    fn run_cancellable(
+        &self,
+        program: &str,
+        args: &[&str],
+        cancel: &xoros_core::CancelToken,
+    ) -> Result<CommandOutput, ToolError> {
+        let _ = cancel;
+        self.run(program, args)
+    }
 }
 
 /// Runs programs found in `PATH` (or the given search directories).
@@ -96,6 +109,66 @@ impl CommandRunner for SystemRunner {
             code: out.status.code(),
             stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
             stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        })
+    }
+
+    fn run_cancellable(
+        &self,
+        program: &str,
+        args: &[&str],
+        cancel: &xoros_core::CancelToken,
+    ) -> Result<CommandOutput, ToolError> {
+        let exe = self
+            .find(program)
+            .ok_or_else(|| ToolError::Missing(program.to_string()))?;
+        let io_err = |e| ToolError::Io(program.to_string(), e);
+        let mut child = Command::new(exe)
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(io_err)?;
+        // Read both pipes in threads so a full pipe never blocks the program.
+        let drain = |r: Option<Box<dyn io::Read + Send>>| {
+            std::thread::spawn(move || {
+                let mut buf = Vec::new();
+                if let Some(mut r) = r {
+                    let _ = r.read_to_end(&mut buf);
+                }
+                String::from_utf8_lossy(&buf).into_owned()
+            })
+        };
+        let out_t = drain(child.stdout.take().map(|r| Box::new(r) as Box<dyn io::Read + Send>));
+        let err_t = drain(child.stderr.take().map(|r| Box::new(r) as Box<dyn io::Read + Send>));
+        let mut killed = false;
+        let status = loop {
+            if let Some(st) = child.try_wait().map_err(io_err)? {
+                break st;
+            }
+            if cancel.is_cancelled() && !killed {
+                killed = true;
+                log::warn!("cancelled: stopping {program} (pid {})", child.id());
+                // SIGTERM first so the program can clean up, SIGKILL after 3 s.
+                // SAFETY: kill(2) on our own child's pid.
+                unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+                while std::time::Instant::now() < deadline {
+                    if child.try_wait().map_err(io_err)?.is_some() {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                let _ = child.kill();
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        };
+        let stdout = out_t.join().unwrap_or_default();
+        let stderr = err_t.join().unwrap_or_default();
+        Ok(CommandOutput {
+            code: if killed { None } else { status.code() },
+            stdout,
+            stderr,
         })
     }
 }
@@ -256,6 +329,32 @@ mod tests {
             f.calls.borrow()[0].1,
             ["-F", "-t", "ext4", "-L", "overlay", "/dev/x5"]
         );
+    }
+
+    #[test]
+    fn cancellable_run_kills_the_program() {
+        let r = SystemRunner::default();
+        let cancel = xoros_core::CancelToken::new();
+        let out = r
+            .run_cancellable("sh", &["-c", "echo hi; echo err >&2"], &cancel)
+            .expect("sh");
+        assert_eq!(
+            (out.code, out.stdout.as_str(), out.stderr.as_str()),
+            (Some(0), "hi\n", "err\n")
+        );
+        let c2 = cancel.clone();
+        let t = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            c2.cancel();
+        });
+        let start = std::time::Instant::now();
+        let out = r
+            .run_cancellable("sh", &["-c", "echo started; exec sleep 30"], &cancel)
+            .expect("sh");
+        t.join().expect("thread");
+        assert!(start.elapsed() < std::time::Duration::from_secs(10));
+        assert_eq!(out.code, None);
+        assert_eq!(out.stdout, "started\n");
     }
 
     #[test]
