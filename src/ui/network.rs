@@ -473,6 +473,55 @@ fn submit_form(
     };
     let remember = checked(s, F_REMEMBER);
     s.pop_layer();
+    // NET-5: a WPA3 password is remembered only with explicit consent.
+    let mut after = env(s).map(|e| profile::load_state(&e)).unwrap_or_default();
+    after.upsert(c.clone());
+    let sae = profile::sae_networks(&after);
+    if remember && !sae.is_empty() {
+        ask_store_sae(s, &sae, move |s, store_sae| {
+            start_form_job(s, c.clone(), country.clone(), apply, remember, store_sae)
+        });
+    } else {
+        start_form_job(s, c, country, apply, remember, false);
+    }
+}
+
+/// NET-5: ask whether WPA3 passwords may be stored in clear text; `then(s, store)`.
+pub fn ask_store_sae<F>(s: &mut Cursive, sae: &[(String, String)], then: F)
+where
+    F: Fn(&mut Cursive, bool) + Send + Sync + 'static,
+{
+    let names = sae
+        .iter()
+        .map(|(i, ssid)| format!("'{ssid}' ({i})"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let text = format!("WPA3 network(s): {names}\n\n{}", texts::NET_SAE_STORE_QUESTION);
+    let then = std::sync::Arc::new(then);
+    let t2 = std::sync::Arc::clone(&then);
+    s.add_layer(closable(
+        Dialog::around(dialogs::scroll_text(text))
+            .title("Remember WPA3 password?")
+            .button("Store password", move |s| {
+                s.pop_layer();
+                then(s, true);
+            })
+            .button("Without password", move |s| {
+                s.pop_layer();
+                t2(s, false);
+            })
+            .dismiss_button(texts::BTN_CANCEL),
+    ));
+}
+
+fn start_form_job(
+    s: &mut Cursive,
+    c: NetConfig,
+    country: Option<String>,
+    apply: bool,
+    remember: bool,
+    store_sae: bool,
+) {
     let title = if apply {
         "Apply network settings"
     } else {
@@ -504,12 +553,9 @@ fn submit_form(
             if remember {
                 ctx.set_message("Saving to the overlay partition");
                 let state = profile::load_state(&env);
-                let p =
-                    profile::remember(app.backend.as_ref(), &state).map_err(TaskFailure::Error)?;
-                t.push_str(&format!(
-                    "Remembered in overlay:/{} (NET-5).\n",
-                    p.display()
-                ));
+                let r = profile::remember_with(app.backend.as_ref(), &state, store_sae)
+                    .map_err(TaskFailure::Error)?;
+                t.push_str(&r.text());
             }
             if apply {
                 t.push('\n');
@@ -659,6 +705,19 @@ fn remembered(s: &mut Cursive) {
 }
 
 fn remember_job(s: &mut Cursive, remember: bool) {
+    if remember {
+        let sae = env(s)
+            .map(|e| profile::sae_networks(&profile::load_state(&e)))
+            .unwrap_or_default();
+        if !sae.is_empty() {
+            ask_store_sae(s, &sae, |s, store| remember_job_run(s, true, store));
+            return;
+        }
+    }
+    remember_job_run(s, remember, false);
+}
+
+fn remember_job_run(s: &mut Cursive, remember: bool, store_sae: bool) {
     let title = if remember {
         "Remember settings"
     } else {
@@ -672,12 +731,9 @@ fn remember_job(s: &mut Cursive, remember: bool) {
         move |app, _ctx| {
             let env = NetEnv::for_backend(app.backend.as_ref());
             if remember {
-                let p = profile::remember(app.backend.as_ref(), &profile::load_state(&env))
+                let r = profile::remember_with(app.backend.as_ref(), &profile::load_state(&env), store_sae)
                     .map_err(TaskFailure::Error)?;
-                Ok(format!(
-                    "Saved to overlay:/{}. These settings are applied on the next rescue boot.",
-                    p.display()
-                ))
+                Ok(r.text())
             } else {
                 Ok(
                     match profile::forget(app.backend.as_ref()).map_err(TaskFailure::Error)? {

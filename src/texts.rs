@@ -165,3 +165,8 @@ pub const TITLE_STRESS: &str = "CPU stress test";
 pub const STRESS_INTRO: &str = "Loads all CPU cores with a self-checking computation and \
 samples the temperature and (Raspberry Pi) the throttling and under-voltage flags. Wrong \
 results, under-voltage, throttling or temperatures from 85 C are reported.";
+
+pub const NET_SAE_STORE_QUESTION: &str = "WPA3 (SAE) cannot store a hash of the password \
+like WPA2 does: remembering it means storing the password in CLEAR TEXT on the overlay \
+partition (file mode 0600). Anyone with access to the disk can read it. Without it, the \
+network is remembered without password and you enter it again after the next rescue boot.";

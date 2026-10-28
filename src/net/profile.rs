@@ -6,6 +6,10 @@
 //! system, NET-6) plus the Wi-Fi country code. The current one lives in
 //! `<run dir>/network.json`; "remember" copies it to `overlay:/rescue/network.json`. Both files
 //! have mode 0600 and WPA2 passphrases are stored as hex PSK only ([`wifi::hash_secret`]).
+//! WPA3-SAE has no such hash (the key is derived from the password per connection), so a
+//! remembered SAE password is stored only with the user's explicit consent, in clear text;
+//! without it the connection is remembered without password and not started on the next boot
+//! (NET-5 deviation, see [`remember_with`]).
 //!
 //! Applying a connection writes the interface's `.network` file for systemd-networkd (DHCP or
 //! static address, gateway, DNS) and starts `wpa_supplicant` for Wi-Fi; without networkd the
@@ -535,12 +539,86 @@ pub fn remembered_rel() -> PathBuf {
     Path::new(RESCUE_DIR).join(NETWORK_JSON_NAME)
 }
 
-/// Store `cfg` on the overlay partition (NET-5): secrets hashed, mode 0600.
+/// WPA3-SAE networks of `cfg` with a password: `(interface, SSID)`.
+pub fn sae_networks(cfg: &RescueNetConfig) -> Vec<(String, String)> {
+    cfg.connections
+        .iter()
+        .filter_map(|c| match &c.medium {
+            Medium::Wifi(w) if matches!(&w.security, WifiSecurity::Sae(p) if !p.is_empty()) => {
+                Some((c.interface.clone().unwrap_or_default(), w.ssid.clone()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// A WPA3-SAE connection whose password was not remembered.
+pub fn sae_without_password(c: &NetConfig) -> bool {
+    matches!(&c.medium, Medium::Wifi(w) if matches!(&w.security, WifiSecurity::Sae(p) if p.is_empty()))
+}
+
+/// What [`remember_with`] stored.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Remembered {
+    /// `rescue/network.json` relative to the overlay partition.
+    pub path: PathBuf,
+    /// SSIDs of WPA3 networks stored with their password in clear text (consent given).
+    pub sae_stored: Vec<String>,
+    /// SSIDs of WPA3 networks stored without password.
+    pub sae_dropped: Vec<String>,
+}
+
+impl Remembered {
+    pub fn text(&self) -> String {
+        let mut t = format!(
+            "Remembered in overlay:/{} for the next rescue boot (NET-5).\n",
+            self.path.display()
+        );
+        if !self.sae_stored.is_empty() {
+            t.push_str(&format!(
+                "WPA3 password of {} stored in clear text (file mode 0600).\n",
+                self.sae_stored.join(", ")
+            ));
+        }
+        if !self.sae_dropped.is_empty() {
+            t.push_str(&format!(
+                "WPA3 password of {} NOT stored: enter it again after the next rescue boot.\n",
+                self.sae_dropped.join(", ")
+            ));
+        }
+        t
+    }
+}
+
+/// Store `cfg` on the overlay partition (NET-5), mode 0600: WPA2 secrets as hex PSK; WPA3-SAE
+/// passwords only without consent dropped (see [`remember_with`]).
 pub fn remember(backend: &dyn SystemBackend, cfg: &RescueNetConfig) -> Result<PathBuf, String> {
+    remember_with(backend, cfg, false).map(|r| r.path)
+}
+
+/// Store `cfg` on the overlay partition (NET-5), mode 0600. WPA2 passphrases become hex PSKs.
+/// WPA3-SAE cannot use a hash: its password is stored in clear text only if
+/// `store_sae_password` (explicit user consent), else the connection is stored without it.
+pub fn remember_with(
+    backend: &dyn SystemBackend,
+    cfg: &RescueNetConfig,
+    store_sae_password: bool,
+) -> Result<Remembered, String> {
     let mut cfg = cfg.clone();
+    let (mut sae_stored, mut sae_dropped) = (Vec::new(), Vec::new());
     for c in &mut cfg.connections {
         if let Medium::Wifi(w) = &mut c.medium {
             wifi::hash_secret(w);
+            if let WifiSecurity::Sae(p) = &mut w.security {
+                if p.is_empty() {
+                    sae_dropped.push(w.ssid.clone());
+                } else if store_sae_password {
+                    sae_stored.push(w.ssid.clone());
+                } else {
+                    p.clear();
+                    sae_dropped.push(w.ssid.clone());
+                }
+            }
         }
     }
     let guard = backend
@@ -556,7 +634,17 @@ pub fn remember(backend: &dyn SystemBackend, cfg: &RescueNetConfig) -> Result<Pa
         cfg.connections.len(),
         remembered_rel().display()
     );
-    Ok(remembered_rel())
+    if !sae_stored.is_empty() {
+        log::warn!(
+            "NET-5: WPA3 password of {} stored in clear text (user consent)",
+            sae_stored.join(", ")
+        );
+    }
+    Ok(Remembered {
+        path: remembered_rel(),
+        sae_stored,
+        sae_dropped,
+    })
 }
 
 /// Delete the remembered configuration; `Ok(false)` if there was none.
@@ -605,6 +693,14 @@ pub fn startup(env: &NetEnv, backend: &dyn SystemBackend) -> Vec<String> {
                 cfg.connections.len()
             ));
             for c in &cfg.connections {
+                if sae_without_password(c) {
+                    lines.push(format!(
+                        "NET-5: {}: the WPA3 password was not remembered; enter it in \
+                         Network -> Configure",
+                        describe(c)
+                    ));
+                    continue;
+                }
                 match apply(env, c, cfg.country.as_deref()) {
                     Ok(r) => lines.extend(r.lines),
                     Err(e) => lines.push(format!("NET-5: {}: {e}", describe(c))),
@@ -826,5 +922,49 @@ mod tests {
         assert_eq!(load_state(&e).interfaces(), vec!["wlan0"]);
         assert!(forget(&b).unwrap());
         assert!(!forget(&b).unwrap());
+    }
+
+    #[test]
+    fn wpa3_password_only_with_consent() {
+        let d = TempDir::new("net-remember-sae");
+        let sim = d.path().join("sim");
+        SimBackend::create_example(&sim).unwrap();
+        let b = SimBackend::open(sim.clone()).unwrap();
+        let mut cfg = RescueNetConfig::default();
+        cfg.upsert(NetConfig::wifi(
+            "wlan0",
+            Wifi::new("Lab3", WifiSecurity::Sae("sae-secret".into())),
+        ));
+        assert_eq!(sae_networks(&cfg), vec![("wlan0".into(), "Lab3".into())]);
+        let file = sim.join("parts/overlay/rescue/network.json");
+
+        // Default: stored without the password; not started on the next boot.
+        let r = remember_with(&b, &cfg, false).unwrap();
+        assert_eq!(r.sae_dropped, vec!["Lab3"]);
+        assert!(r.text().contains("NOT stored"));
+        assert!(!fs::read_to_string(&file).unwrap().contains("sae-secret"));
+        let back = load_remembered(&b).unwrap().unwrap();
+        assert!(sae_without_password(&back.connections[0]));
+        let e = env(&d);
+        let lines = startup(&e, &b);
+        assert!(
+            lines.iter().any(|l| l.contains("WPA3 password was not remembered")),
+            "{lines:?}"
+        );
+        assert!(!e.run_dir.join("wpa_supplicant-wlan0.conf").exists());
+        // The connection is still known (form pre-filled), the password must be entered.
+        assert_eq!(load_state(&e).interfaces(), vec!["wlan0"]);
+        assert!(sae_networks(&load_state(&e)).is_empty());
+
+        // With consent: in clear text, mode 0600, and started on the next boot.
+        let r = remember_with(&b, &cfg, true).unwrap();
+        assert_eq!(r.sae_stored, vec!["Lab3"]);
+        assert!(r.text().contains("clear text"));
+        assert!(fs::read_to_string(&file).unwrap().contains("sae-secret"));
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
+        startup(&e, &b);
+        let conf = fs::read_to_string(e.run_dir.join("wpa_supplicant-wlan0.conf")).unwrap();
+        assert!(conf.contains("sae_password=\"sae-secret\""));
     }
 }
