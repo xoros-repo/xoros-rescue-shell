@@ -197,6 +197,8 @@ pub fn run(app: App) -> Result<(), String> {
         log::warn!("rescue check not started: {e}");
     }
     app.start_network_setup();
+    // SSH-1: an sshd of a TUI that crashed or was killed is stopped now.
+    stop_ssh_if_started(&app);
     refresh_status(&mut siv);
     start_ticker(&siv);
 
@@ -212,19 +214,18 @@ pub fn run(app: App) -> Result<(), String> {
     Ok(())
 }
 
-/// sshd was started from this TUI (SSH-1: stop it when the app exits).
-static SSH_STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-pub fn mark_ssh_started() {
-    SSH_STARTED.store(true, std::sync::atomic::Ordering::SeqCst);
+/// sshd was started from the TUI (SSH-1: stop it when the app exits, also after a crash).
+pub fn mark_ssh_started(app: &App) {
+    let env = crate::net::NetEnv::for_backend(app.backend.as_ref());
+    if let Err(e) = crate::net::ssh::mark_started_by_tui(&env) {
+        log::warn!("SSH-1: {e}");
+    }
 }
 
 fn stop_ssh_if_started(app: &App) {
-    if SSH_STARTED.load(std::sync::atomic::Ordering::SeqCst) {
-        let env = crate::net::NetEnv::for_backend(app.backend.as_ref());
-        if let Err(e) = crate::net::ssh::stop(&env) {
-            log::warn!("SSH-1: {e}");
-        }
+    let env = crate::net::NetEnv::for_backend(app.backend.as_ref());
+    if let Some(line) = crate::net::ssh::stop_tui_owned(&env) {
+        log::info!("{line}");
     }
 }
 
