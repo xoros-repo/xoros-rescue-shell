@@ -13,6 +13,9 @@ repository = "https://github.com/xoros-repo/xoros-rescue-shell.git"
 # UI only (src/ui/): cursive with the crossterm backend (UI-1, ARCH-1).
 cursive = { version = "0.20", default-features = false, features = ["crossterm", "crossterm-backend"] }
 cursive_buffered_backend = "0.6"
+# Same crossterm as cursive's backend: the subshell (SH-1) takes over keys its event reader
+# already read from the tty.
+crossterm = "0.25"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 libc = "0.2"
 log = { version = "0.4", features = ["std"] }
