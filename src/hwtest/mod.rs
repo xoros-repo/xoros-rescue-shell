@@ -1,6 +1,6 @@
 //! Hardware and integrity tests (TST-*): memory test (TST-1), reboot into memtest86+ (TST-2),
 //! disk read test (TST-3), slot integrity (TST-4), rescue integrity (TST-5), file system check
-//! (TST-6) and disk health (TST-7).
+//! (TST-6), disk health (TST-7) and the destructive stick test (TST-8).
 //!
 //! Every test runs inside a [`TaskRunner`](crate::tasks::TaskRunner) worker (progress and
 //! cancel, UI-3) through [`run_recorded`], which turns the outcome into a [`TestResult`]
@@ -14,6 +14,7 @@ pub mod health;
 pub mod memtest;
 pub mod memtest86;
 pub mod slotcheck;
+pub mod sticktest;
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -51,6 +52,8 @@ pub enum TestKind {
     FsRepair,
     /// TST-7.
     DiskHealth,
+    /// TST-8.
+    StickTest,
 }
 
 impl TestKind {
@@ -63,6 +66,7 @@ impl TestKind {
             TestKind::FsCheck => "File system check",
             TestKind::FsRepair => "File system repair",
             TestKind::DiskHealth => "Disk health",
+            TestKind::StickTest => "Stick write test",
         }
     }
 
@@ -75,6 +79,7 @@ impl TestKind {
             TestKind::RescueIntegrity => "TST-5",
             TestKind::FsCheck | TestKind::FsRepair => "TST-6",
             TestKind::DiskHealth => "TST-7",
+            TestKind::StickTest => "TST-8",
         }
     }
 
@@ -88,6 +93,7 @@ impl TestKind {
             TestKind::FsCheck => "fsck.txt",
             TestKind::FsRepair => "fsck-repair.txt",
             TestKind::DiskHealth => "disk-health.txt",
+            TestKind::StickTest => "stick-test.txt",
         }
     }
 }
@@ -349,6 +355,8 @@ pub enum TestRequest {
     Fsck(fsck::FsckRequest),
     /// Disk health of these disks (kernel names; all when empty).
     Health(Vec<String>),
+    /// Destructive write/read-back test of an external disk.
+    Stick(sticktest::StickTestRequest),
 }
 
 impl TestRequest {
@@ -361,13 +369,15 @@ impl TestRequest {
             TestRequest::Fsck(r) if r.repair => TestKind::FsRepair,
             TestRequest::Fsck(_) => TestKind::FsCheck,
             TestRequest::Health(_) => TestKind::DiskHealth,
+            TestRequest::Stick(_) => TestKind::StickTest,
         }
     }
 
     /// e2fsck runs as a write task: nothing else may use the partitions meanwhile (UI-3).
     pub fn task_kind(&self) -> TaskKind {
         match self {
-            TestRequest::Fsck(_) => TaskKind::Write,
+            // The stick test is destructive: one write operation at a time (UI-3).
+            TestRequest::Fsck(_) | TestRequest::Stick(_) => TaskKind::Write,
             _ => TaskKind::ReadOnly,
         }
     }
@@ -465,6 +475,9 @@ pub fn run_request(env: &TestEnv, req: &TestRequest, ctx: &TaskCtx) -> TestResul
             };
             run_recorded(store, kind, &target, ctx, |ctx| health::run(backend, disks, ctx))
         }
+        TestRequest::Stick(r) => run_recorded(store, kind, &r.disk, ctx, |ctx| {
+            sticktest::run(backend, r, ctx)
+        }),
     }
 }
 

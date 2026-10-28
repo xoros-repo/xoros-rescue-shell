@@ -816,7 +816,7 @@ fn test_request(app: &App, args: &[String]) -> Result<Option<hwtest::TestRequest
         }
         _ => {
             return Err(
-                "test needs: slots | rescue | memory | memtest86 | disk | fsck | health | \
+                "test needs: slots | rescue | memory | memtest86 | disk | fsck | health | stick | \
                  results."
                     .into(),
             )

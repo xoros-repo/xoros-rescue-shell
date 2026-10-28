@@ -150,3 +150,12 @@ pub const TITLE_HEALTH: &str = "Disk health";
 pub const HEALTH_INTRO: &str = "Reads the SMART / NVMe health data (smartctl, nvme-cli or \
 the NVMe log page) and what sysfs offers (eMMC wear, I/O error counters). Nothing is written. \
 USB sticks and SD cards usually have no SMART data.";
+
+pub const TITLE_STICKTEST: &str = "Stick write test (destructive)";
+
+pub const STICKTEST_INTRO: &str = "Writes a test pattern over the WHOLE selected stick and \
+reads it back: finds fake-capacity sticks and bad areas. Everything on the stick is \
+destroyed. The boot disk is never offered.";
+
+pub const STICKTEST_AFTER: &str = "The stick now has no partition table or file system: \
+create them again before using it (e.g. on a PC).";

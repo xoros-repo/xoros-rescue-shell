@@ -53,11 +53,23 @@ impl DiskHealth {
 pub fn smartctl_status(code: i32) -> (Outcome, Vec<(Outcome, &'static str)>) {
     const BITS: &[(i32, Outcome, &str)] = &[
         (0, Outcome::Error, "command line not accepted"),
-        (1, Outcome::Error, "device could not be opened (no SMART over this bridge?)"),
-        (2, Outcome::Error, "a SMART command failed or the data checksum is wrong"),
+        (
+            1,
+            Outcome::Error,
+            "device could not be opened (no SMART over this bridge?)",
+        ),
+        (
+            2,
+            Outcome::Error,
+            "a SMART command failed or the data checksum is wrong",
+        ),
         (3, Outcome::Fail, "SMART status: DISK FAILING"),
         (4, Outcome::Fail, "prefail attributes at or below threshold"),
-        (5, Outcome::Warning, "usage attributes were at or below threshold in the past"),
+        (
+            5,
+            Outcome::Warning,
+            "usage attributes were at or below threshold in the past",
+        ),
         (6, Outcome::Warning, "the device error log has errors"),
         (7, Outcome::Warning, "the self-test log has errors"),
     ];
@@ -253,12 +265,21 @@ fn judge_nvme(n: &NvmeHealth, h: &mut DiskHealth) {
         }
     }
     if n.percentage_used >= 100 {
-        h.flag(Outcome::Fail, format!("worn out ({} % used)", n.percentage_used));
+        h.flag(
+            Outcome::Fail,
+            format!("worn out ({} % used)", n.percentage_used),
+        );
     } else if n.percentage_used >= 90 {
-        h.flag(Outcome::Warning, format!("{} % of the rated life used", n.percentage_used));
+        h.flag(
+            Outcome::Warning,
+            format!("{} % of the rated life used", n.percentage_used),
+        );
     }
     if n.media_errors > 0 {
-        h.flag(Outcome::Warning, format!("{} media error(s)", n.media_errors));
+        h.flag(
+            Outcome::Warning,
+            format!("{} media error(s)", n.media_errors),
+        );
     }
 }
 
@@ -344,15 +365,24 @@ fn judge_emmc(dir: &Path, h: &mut DiskHealth) {
         if worst_v >= 0x0b {
             h.flag(Outcome::Fail, "eMMC life time exceeded");
         } else if worst_v >= 0x09 {
-            h.flag(Outcome::Warning, format!("eMMC life time {} used", pct(worst_v)));
+            h.flag(
+                Outcome::Warning,
+                format!("eMMC life time {} used", pct(worst_v)),
+            );
         }
     }
     if let Some(eol) = read_trimmed(&dir.join("pre_eol_info")) {
         h.known = true;
         match parse_hex(&eol) {
             Some(1) => h.line("eMMC pre-EOL: normal"),
-            Some(2) => h.flag(Outcome::Warning, "eMMC pre-EOL warning (80 % of reserved blocks used)"),
-            Some(3) => h.flag(Outcome::Fail, "eMMC pre-EOL urgent (reserved blocks nearly used up)"),
+            Some(2) => h.flag(
+                Outcome::Warning,
+                "eMMC pre-EOL warning (80 % of reserved blocks used)",
+            ),
+            Some(3) => h.flag(
+                Outcome::Fail,
+                "eMMC pre-EOL urgent (reserved blocks nearly used up)",
+            ),
             _ => h.line(format!("eMMC pre-EOL: {eol}")),
         }
     }
@@ -469,7 +499,9 @@ pub fn check_disk(env: &HealthEnv<'_>, disk: &BlockDevice) -> DiskHealth {
 
 /// Disks the health test looks at: real disks, not loop/RAM devices.
 pub fn testable(d: &BlockDevice) -> bool {
-    !["loop", "ram", "zram"].iter().any(|p| d.name.starts_with(p))
+    !["loop", "ram", "zram"]
+        .iter()
+        .any(|p| d.name.starts_with(p))
 }
 
 /// Run the test over `disks` (kernel names; all disks when empty).
@@ -640,7 +672,12 @@ ID# ATTRIBUTE_NAME          FLAG     VALUE WORST THRESH TYPE      UPDATED  WHEN_
         b[160..168].copy_from_slice(&2u64.to_le_bytes());
         let n = parse_nvme_log(&b).expect("parse");
         assert_eq!(
-            (n.critical_warning, n.temperature_c, n.percentage_used, n.power_on_hours),
+            (
+                n.critical_warning,
+                n.temperature_c,
+                n.percentage_used,
+                n.power_on_hours
+            ),
             (4, Some(37), 3, 500)
         );
         assert_eq!(n.media_errors, 2);
@@ -656,7 +693,10 @@ ID# ATTRIBUTE_NAME          FLAG     VALUE WORST THRESH TYPE      UPDATED  WHEN_
                    media_errors                            : 0\n\
                    power_on_hours                          : 1,024\n";
         let n = parse_nvme_cli(cli).expect("cli");
-        assert_eq!((n.percentage_used, n.power_on_hours, n.temperature_c), (95, 1024, Some(34)));
+        assert_eq!(
+            (n.percentage_used, n.power_on_hours, n.temperature_c),
+            (95, 1024, Some(34))
+        );
         let d = TempDir::new("health-nvme");
         let t = Tools([("nvme", (0, cli.to_string()))].into());
         let h = check_disk(&env(&d, &t), &disk("nvme0n1", "nvme"));

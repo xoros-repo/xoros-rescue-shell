@@ -39,6 +39,7 @@ pub fn menu() -> Tree {
         .leaf("Disk read test...", disk_start)
         .leaf("File system check...", fsck_start)
         .leaf("Disk health...", health_start)
+        .leaf("Stick write test (destructive)...", stick_start)
         .delimiter()
         .leaf(texts::TITLE_TEST_RESULTS, show_results)
 }
@@ -383,4 +384,70 @@ fn health_start(s: &mut Cursive) {
         items,
         |s, disks| run_test(s, TestRequest::Health(disks.clone())),
     );
+}
+
+// --- TST-8 ---
+
+fn stick_start(s: &mut Cursive) {
+    use crate::hwtest::sticktest::{candidates, label};
+    let Some(a) = app(s) else { return };
+    pop_to_base(s);
+    let disks = match candidates(a.backend.as_ref()) {
+        Ok(d) if d.is_empty() => {
+            dialogs::info(s, texts::TITLE_STICKTEST, "No stick found (the boot disk is never offered).");
+            return;
+        }
+        Ok(d) => d,
+        Err(e) => {
+            dialogs::error(s, "Cannot list the disks.", &e);
+            return;
+        }
+    };
+    let items = disks.into_iter().map(|d| (label(&d), d)).collect();
+    choose(
+        s,
+        texts::TITLE_STICKTEST,
+        texts::STICKTEST_INTRO,
+        items,
+        |s, d| stick_confirm(s, d.clone()),
+    );
+}
+
+fn stick_confirm(s: &mut Cursive, d: crate::backend::BlockDevice) {
+    use crate::hwtest::sticktest::{StickTestRequest, CONFIRM_WORD};
+    let parts = if d.partitions.is_empty() {
+        "no partitions".to_string()
+    } else {
+        d.partitions
+            .iter()
+            .map(|p| {
+                format!(
+                    "{} {} {}",
+                    p.name,
+                    p.fstype.as_deref().unwrap_or("?"),
+                    format_bytes(p.size)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    // About 10 MB/s write + 20 MB/s read on a typical stick.
+    let minutes = d.size / 10_000_000 / 60 + d.size / 20_000_000 / 60 + 1;
+    let text = format!(
+        "ALL DATA on {} ({}, {}) will be destroyed:\n{parts}\n\nThis takes roughly {minutes} \
+         minute(s) or more.",
+        d.name,
+        d.model.as_deref().unwrap_or("unknown model"),
+        format_bytes(d.size)
+    );
+    let disk = d.name.clone();
+    dialogs::confirm_typed(s, texts::TITLE_STICKTEST, &text, CONFIRM_WORD, move |s, typed| {
+        run_test(
+            s,
+            TestRequest::Stick(StickTestRequest {
+                disk: disk.clone(),
+                confirmation: typed,
+            }),
+        )
+    });
 }

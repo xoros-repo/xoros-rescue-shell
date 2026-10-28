@@ -4,29 +4,68 @@
 
 use crate::app::App;
 use crate::cli::check_test_args;
-use crate::hwtest::{memtest86, TestRequest};
+use crate::hwtest::{memtest86, sticktest, TestRequest};
 
 pub const USAGE: &str = "\
   xoros-rescue-shell [--sim <dir>] --cli test memtest86 [--reboot]
   xoros-rescue-shell [--sim <dir>] --cli test health [<disk>...]
+  xoros-rescue-shell [--sim <dir>] --cli test stick [<disk> --confirm ERASE]
+                     (without a disk: list the disks that can be tested)
 ";
 
 /// Words of `args` that are not options.
 fn positional(args: &[String]) -> Vec<String> {
-    args.iter().filter(|a| !a.starts_with('-')).cloned().collect()
+    positional_values(args, &[])
+}
+
+/// Words of `args` that are neither options nor the values of the options in `values`.
+fn positional_values(args: &[String], values: &[&str]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut skip = false;
+    for a in args {
+        if skip {
+            skip = false;
+        } else if a.starts_with('-') {
+            skip = values.contains(&a.as_str());
+        } else {
+            out.push(a.clone());
+        }
+    }
+    out
+}
+
+fn opt_value(args: &[String], name: &str) -> Option<String> {
+    args.iter()
+        .position(|a| a == name)
+        .and_then(|i| args.get(i + 1))
+        .cloned()
 }
 
 /// `--cli test <word> <args>` for the tests of this module; `None` for other words.
-pub fn test_request(
-    app: &App,
-    word: &str,
-    args: &[String],
-) -> Option<Result<TestRequest, String>> {
+pub fn test_request(app: &App, word: &str, args: &[String]) -> Option<Result<TestRequest, String>> {
     let _ = app;
     Some(match word {
-        "health" => check_test_args(args, &[], &[], true).map(|()| {
-            TestRequest::Health(positional(args))
-        }),
+        "health" => {
+            check_test_args(args, &[], &[], true).map(|()| TestRequest::Health(positional(args)))
+        }
+        "stick" => (|| {
+            check_test_args(args, &["--confirm"], &[], true)?;
+            let pos = positional_values(args, &["--confirm"]);
+            let [disk] = pos.as_slice() else {
+                return Err("test stick: give one disk (see 'test stick').".to_string());
+            };
+            let confirmation = opt_value(args, "--confirm").unwrap_or_default();
+            if confirmation != sticktest::CONFIRM_WORD {
+                return Err(format!(
+                    "This destroys everything on {disk}: add --confirm {} (UI-4).",
+                    sticktest::CONFIRM_WORD
+                ));
+            }
+            Ok(TestRequest::Stick(sticktest::StickTestRequest {
+                disk: disk.clone(),
+                confirmation,
+            }))
+        })(),
         _ => return None,
     })
 }
@@ -37,6 +76,13 @@ pub fn run_test_command(app: &App, args: &[String]) -> Option<i32> {
     let rest = args.get(1..).unwrap_or(&[]);
     let r = match args.first().map(String::as_str)? {
         "memtest86" => memtest86_cmd(app, rest),
+        "stick" if rest.is_empty() => sticktest::candidates(app.backend.as_ref()).map(|v| {
+            if v.is_empty() {
+                "No disk other than the boot disk found.\n".to_string()
+            } else {
+                v.iter().map(|d| sticktest::label(d) + "\n").collect()
+            }
+        }),
         _ => return None,
     };
     Some(match r {
@@ -121,5 +167,24 @@ mod tests {
             Some(Ok(TestRequest::Health(a(&["sda", "sdb"]))))
         );
         assert!(matches!(req("health", &["--all"]), Some(Err(_))));
+        assert!(matches!(req("stick", &["sdb"]), Some(Err(_))));
+        assert!(matches!(
+            req("stick", &["sdb", "--confirm", "yes"]),
+            Some(Err(_))
+        ));
+        assert!(matches!(
+            req("stick", &["sdb", "sdc", "--confirm", "ERASE"]),
+            Some(Err(_))
+        ));
+        assert_eq!(
+            req("stick", &["sdb", "--confirm", "ERASE"]),
+            Some(Ok(TestRequest::Stick(sticktest::StickTestRequest {
+                disk: "sdb".into(),
+                confirmation: "ERASE".into()
+            })))
+        );
+        let list = sticktest::candidates(app.backend.as_ref()).expect("list");
+        assert_eq!(list.len(), 1);
+        assert!(sticktest::label(&list[0]).starts_with("sdb "));
     }
 }
