@@ -676,6 +676,27 @@ fn time_cmd(app: &App, args: &[String]) -> Result<String, String> {
     }
 }
 
+/// Like [`check_options`], for `--cli test` sub-commands; words without `--` are allowed
+/// only when the sub-command takes positional arguments.
+fn check_test_args(
+    args: &[String],
+    values: &[&str],
+    flags: &[&str],
+    positional: bool,
+) -> Result<(), String> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if values.contains(&a.as_str()) {
+            if it.next().is_none() {
+                return Err(format!("{a} needs a value."));
+            }
+        } else if !(flags.contains(&a.as_str()) || positional && !a.starts_with('-')) {
+            return Err(format!("Unknown argument '{a}'."));
+        }
+    }
+    Ok(())
+}
+
 /// `--cli test ...` (TST-*): parse into a request.
 fn test_request(app: &App, args: &[String]) -> Result<Option<hwtest::TestRequest>, String> {
     use hwtest::{fsck::FsckRequest, memtest, slotcheck, TestRequest};
@@ -699,6 +720,21 @@ fn test_request(app: &App, args: &[String]) -> Result<Option<hwtest::TestRequest
         }
         out
     };
+    let rest = args.get(1..).unwrap_or(&[]);
+    match args.first().map(String::as_str) {
+        Some("results") => check_test_args(rest, &[], &["--json"], false)?,
+        Some("rescue") => check_test_args(rest, &[], &[], false)?,
+        Some("memory") => check_test_args(rest, &["--percent", "--passes"], &[], false)?,
+        Some("disk") => check_test_args(rest, &["--device"], &[], false)?,
+        Some("slots") => check_test_args(
+            rest,
+            &[SOURCE_OPTIONS, &["--manifest"]].concat(),
+            &["--no-files"],
+            true,
+        )?,
+        Some("fsck") => check_test_args(rest, &["--confirm"], &["--repair"], true)?,
+        _ => {}
+    }
     Ok(Some(match args.first().map(String::as_str) {
         Some("results") => return Ok(None),
         Some("rescue") => TestRequest::Rescue,
@@ -1000,5 +1036,14 @@ mod tests {
             other => panic!("{other:?}"),
         }
         assert!(req(&["bogus"]).is_err());
+        // Unknown arguments are rejected (a typo must not run a different test).
+        assert!(req(&["rescue", "--fast"]).is_err());
+        assert!(req(&["memory", "--percnt", "50"]).is_err());
+        assert!(req(&["memory", "--percent"]).is_err());
+        assert!(req(&["disk", "sda"]).is_err());
+        assert!(req(&["slots", "A", "--no-file"]).is_err());
+        assert!(req(&["fsck", "overlay", "--repiar"]).is_err());
+        assert_eq!(req(&["results", "--json"]), Ok(None));
+        assert!(req(&["results", "--jsn"]).is_err());
     }
 }
