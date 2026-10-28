@@ -74,8 +74,8 @@ fn word(seed: u64, unit_off: u64, i: usize) -> u64 {
 }
 
 fn fill_unit(buf: &mut [u8], seed: u64, unit_off: u64) {
-    for (i, w) in buf.chunks_exact_mut(8).enumerate() {
-        w.copy_from_slice(&word(seed, unit_off, i).to_le_bytes());
+    for (i, w) in buf.as_chunks_mut::<8>().0.iter_mut().enumerate() {
+        *w = word(seed, unit_off, i).to_le_bytes();
     }
 }
 
@@ -104,7 +104,7 @@ pub fn check_unit(buf: &[u8], seed: u64, unit_off: u64, size: u64) -> UnitState 
         return UnitState::Good;
     }
     let claimed = read_word(buf, 0) ^ splitmix(seed);
-    if claimed != unit_off && claimed % UNIT as u64 == 0 && claimed < size && ok(claimed) {
+    if claimed != unit_off && claimed.is_multiple_of(UNIT as u64) && claimed < size && ok(claimed) {
         UnitState::Wrapped(claimed)
     } else {
         UnitState::Bad
@@ -214,7 +214,7 @@ pub fn write_read(
     while off < size {
         let len = (size - off).min(BLOCK as u64) as usize;
         let b = buf.get(len);
-        for (u, chunk) in b.chunks_exact_mut(UNIT).enumerate() {
+        for (u, chunk) in b.as_chunks_mut::<UNIT>().0.iter_mut().enumerate() {
             fill_unit(chunk, seed, off + (u * UNIT) as u64);
         }
         if let Err(e) = dev.write_all_at(b, off) {
@@ -239,7 +239,7 @@ pub fn write_read(
         let werr = write_errors
             .iter()
             .any(|(o, l)| off < o + l && *o < off + len as u64);
-        for (u, chunk) in b.chunks_exact(UNIT).enumerate() {
+        for (u, chunk) in b.as_chunks::<UNIT>().0.iter().enumerate() {
             let uo = off + (u * UNIT) as u64;
             let state = if !read_ok {
                 UnitState::ReadError

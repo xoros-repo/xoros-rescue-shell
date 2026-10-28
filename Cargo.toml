@@ -41,4 +41,4 @@ tempfile = "3"
 # Local HTTP server for the OTA integration tests (TEST-2); same version as xoros-core's.
 tiny_http = "0.12"
 # Signs test manifests like `xor update create signature` (OTA-8 tests); already used by xoros-core.
-k256 = { version = "0.13", features = ["ecdsa", "sha256"] }
+k256 = { version = "0.14", features = ["ecdsa", "sha256"] }

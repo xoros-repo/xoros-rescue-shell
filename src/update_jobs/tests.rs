@@ -420,7 +420,7 @@ fn sign_tree(dir: &Path, seed: u8) -> String {
     let digest = sha2::Sha256::digest(&bytes);
     let sig: k256::ecdsa::Signature = sk.sign(&digest);
     let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
-    let pk = hex(sk.verifying_key().to_encoded_point(true).as_bytes());
+    let pk = hex(sk.verifying_key().to_sec1_point(true).as_bytes());
     let json = serde_json::json!({"mh": hex(&digest), "ms": hex(&sig.to_bytes()), "pk": pk});
     fs::write(dir.join("signature.json"), json.to_string()).expect("signature");
     pk
@@ -445,7 +445,7 @@ fn signature_policy_from_settings() {
     let other = {
         let sk = k256::ecdsa::SigningKey::from_slice(&[9; 32]).expect("key");
         sk.verifying_key()
-            .to_encoded_point(true)
+            .to_sec1_point(true)
             .as_bytes()
             .iter()
             .map(|x| format!("{x:02x}"))
