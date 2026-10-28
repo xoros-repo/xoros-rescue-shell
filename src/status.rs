@@ -45,6 +45,32 @@ pub struct PersistentStatus {
     pub present: bool,
     pub usage: Option<FsUsage>,
     pub error: Option<String>,
+    /// Last file system check if known (SYS-1): this session's fsck result, else the ext4
+    /// superblock state and last check time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fsck: Option<String>,
+}
+
+/// SYS-1 "last fsck result if known" from the ext4 superblock of `device`.
+pub fn fs_check_text(sb: &xoros_core::ext4::Superblock) -> String {
+    use xoros_core::ext4::{STATE_ERROR, STATE_VALID};
+    let state = if sb.state & STATE_ERROR != 0 || sb.error_count > 0 {
+        "errors recorded"
+    } else if sb.state & STATE_VALID != 0 {
+        "clean"
+    } else {
+        "not cleanly unmounted"
+    };
+    let checked = match sb.last_check_time {
+        0 => "never checked".to_string(),
+        t => format!(
+            "last checked {}",
+            crate::net::time::format_utc(
+                std::time::UNIX_EPOCH + std::time::Duration::from_secs(u64::from(t))
+            )
+        ),
+    };
+    format!("file system {state}, {checked}")
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -151,7 +177,12 @@ pub fn collect_status(backend: &dyn SystemBackend, rescue_check: RescueCheck) ->
                 Some(Err(e)) => (None, Some(e.to_string())),
                 None => (None, None),
             };
+            let fsck = device
+                .as_deref()
+                .and_then(|d| xoros_core::ext4::Superblock::read_path(d).ok())
+                .map(|sb| fs_check_text(&sb));
             PersistentStatus {
+                fsck,
                 label: label.to_string(),
                 present: device.is_some(),
                 device,

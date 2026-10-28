@@ -169,6 +169,9 @@ pub fn status_text(st: &SystemStatus) -> String {
             p.device.as_deref().unwrap_or("missing"),
             usage
         );
+        if let Some(f) = &p.fsck {
+            let _ = writeln!(out, "  {:<12} {}", "", ellipsize(f, 64));
+        }
     }
     out.push('\n');
 

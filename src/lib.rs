@@ -19,6 +19,7 @@ pub mod logs;
 pub mod net;
 pub mod partition_jobs;
 pub mod power;
+pub mod reach;
 pub mod report;
 pub mod rtc;
 pub mod slots;

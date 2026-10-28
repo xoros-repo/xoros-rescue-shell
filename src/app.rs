@@ -8,7 +8,7 @@ use crate::backend::sim::SimBackend;
 use crate::backend::unavailable::UnavailableBackend;
 use crate::backend::{BackendError, SystemBackend};
 use crate::constants::SIM_ENV_VAR;
-use crate::hwtest::ResultStore;
+use crate::hwtest::{ResultStore, TestKind};
 use crate::slots::{start_rescue_check, RescueCheck};
 use crate::status::{collect_status, Reason, SystemStatus};
 use crate::tasks::{lock, OnFinish, SpawnError, TaskHandle, TaskRunner};
@@ -19,6 +19,8 @@ pub struct App {
     pub rescue_check: Arc<Mutex<RescueCheck>>,
     /// Hardware test results of this boot (TST-*).
     pub test_results: Arc<ResultStore>,
+    /// Result of the last background "Internet reachable" check (SYS-1); `None` = not yet.
+    pub internet: Arc<Mutex<Option<bool>>>,
     /// Why rescue was entered, captured the first time the boot state was readable, so
     /// later counter changes in this session do not change the answer (SYS-1).
     boot_reason: Mutex<Option<Reason>>,
@@ -59,6 +61,7 @@ impl App {
             backend,
             tasks: TaskRunner::new(),
             rescue_check: Arc::new(Mutex::new(RescueCheck::NotChecked)),
+            internet: Arc::new(Mutex::new(None)),
             boot_reason: Mutex::new(None),
         }
     }
@@ -82,6 +85,7 @@ impl App {
     pub fn start_network_setup(&self) {
         let env = crate::net::NetEnv::for_backend(self.backend.as_ref());
         let backend = Arc::clone(&self.backend);
+        let internet = Arc::clone(&self.internet);
         let spawned = std::thread::Builder::new()
             .name("net-setup".into())
             .spawn(move || {
@@ -97,6 +101,11 @@ impl App {
                         }
                     }
                 }
+                // SYS-1: keep "Internet reachable" current while the app runs.
+                loop {
+                    *lock(&internet) = Some(crate::reach::internet_reachable(&env));
+                    std::thread::sleep(std::time::Duration::from_secs(30));
+                }
             });
         if let Err(e) = spawned {
             log::warn!("network setup not started: {e}");
@@ -111,6 +120,18 @@ impl App {
             Some(r) => st.reason = r.clone(),
             None if st.boot.is_some() => *cached = Some(st.reason.clone()),
             None => {}
+        }
+        st.network.internet_reachable = *lock(&self.internet);
+        // SYS-1: a file system check of this session beats the superblock information.
+        let results = self.test_results.all();
+        for p in st.persistent.iter_mut() {
+            let last = results.iter().rev().find(|r| {
+                matches!(r.kind, TestKind::FsCheck | TestKind::FsRepair)
+                    && (r.target.contains(&p.label) || r.details.contains(&p.label))
+            });
+            if let Some(r) = last {
+                p.fsck = Some(format!("{}: {} ({} UTC)", r.kind.title(), r.outcome, r.started));
+            }
         }
         st
     }
