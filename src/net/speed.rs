@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use sha2::{Digest, Sha256};
 use xoros_core::http::HttpClient;
 use xoros_core::manifest::{ImageType, Manifest};
+use xoros_core::source::ota_url;
 
 use super::config::dns_servers;
 use super::http::{http_options, ota_dir_url};
@@ -80,14 +81,14 @@ pub fn run(
     ctx.set_message("Loading the OTA manifest");
     let client =
         HttpClient::new(&http_options(opts.proxy.clone(), dns_servers(env))).map_err(net_err)?;
-    let manifest_url = format!("{dir}/manifest.json");
+    let manifest_url = ota_url(&opts.base_url, &target, "manifest.json");
     let data = client
         .get_bytes(&manifest_url, MANIFEST_LIMIT)
         .map_err(net_err)?;
     let m = Manifest::from_slice(&data).map_err(net_err)?;
     let (chunk, image_size) = pick_chunk(&m)
         .ok_or_else(|| TaskFailure::Error(format!("{manifest_url}: no image chunks.")))?;
-    let url = format!("{dir}/{}", chunk.file);
+    let url = ota_url(&opts.base_url, &target, &chunk.file);
     ctx.check_cancelled()?;
     ctx.set_message(format!(
         "Downloading {} ({})",

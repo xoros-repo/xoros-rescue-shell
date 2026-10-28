@@ -1,17 +1,20 @@
 //! Network test (NET-4): one step after the other, each with pass/fail, details and duration.
+//! Link, address and gateway are checked here; clock, DNS, TCP and the HTTPS GET of the
+//! manifest come from `xoros_core::net::connectivity_check` (CORE-2).
 //! Read-only: nothing is configured here (in simulation mode it tests the host's network).
 
 use std::fs;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, UdpSocket};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
 use super::config::{dns_servers, refresh_resolv_conf};
-use super::http::{http_options, url_host_port};
+use super::http::http_options;
 use super::info::{host_addresses, interfaces_from_sysfs};
-use super::time::{build_time, clock_plausible, format_utc};
-use super::{dns, NetEnv};
+use super::time::{build_time, format_utc};
+use super::NetEnv;
+use xoros_core::net::{connectivity_check, CheckOptions, CheckResult, CheckStatus, CheckStep};
 use crate::cmd;
 use crate::tasks::CancelToken;
 
@@ -134,7 +137,8 @@ fn arp_after_probe(env: &NetEnv, gw: Ipv4Addr) -> bool {
 }
 
 /// Run all steps; `on_step` sees each step when it is done. Later steps that depend on a
-/// failed one are skipped. Stops early when cancelled.
+/// failed one are skipped. Cancel is checked between the app's own steps; the crate's
+/// connectivity check runs to its end (bounded by the HTTP timeouts).
 pub fn run(
     env: &NetEnv,
     opts: &TestOptions,
@@ -204,94 +208,57 @@ pub fn run(
         return steps;
     }
 
-    // 4. DNS
-    let (host, port) = url_host_port(&opts.url).unwrap_or_else(|| (String::new(), 443));
-    let mut resolved: Vec<IpAddr> = Vec::new();
-    let s = timed("DNS", || {
-        let servers = refresh_resolv_conf(env).unwrap_or_else(|_| dns_servers(env));
-        if host.parse::<IpAddr>().is_ok() {
-            resolved = vec![host.parse().unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST))];
-            return (StepStatus::Skip, format!("{host} is an IP address"));
+    // 4.-7. clock, DNS, TCP and HTTPS GET of the manifest: the crate's connectivity check
+    // (XC-90, CORE-2) with the app's resolver and server list (NET-3) and build date (NET-7).
+    let servers = refresh_resolv_conf(env).unwrap_or_else(|_| dns_servers(env));
+    let server_list = servers
+        .iter()
+        .map(|s| s.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut o = http_options(opts.proxy.clone(), servers);
+    o.connect_timeout = Duration::from_secs(10);
+    o.read_timeout = Duration::from_secs(15);
+    let check = CheckOptions::with_http(o).not_before(build_time());
+    for r in connectivity_check(&opts.url, &check) {
+        let mut s = from_check(&r);
+        if r.step == CheckStep::Dns && r.status != CheckStatus::Skipped {
+            s.detail.push_str(&if server_list.is_empty() {
+                " (no DNS servers: system resolver)".to_string()
+            } else {
+                format!(" (servers {server_list})")
+            });
         }
-        if servers.is_empty() {
-            return (StepStatus::Fail, "no DNS servers (DHCP lease?)".into());
-        }
-        let list: Vec<String> = servers.iter().map(|s| s.to_string()).collect();
-        match dns::resolve(&host, &servers, Duration::from_secs(3)) {
-            Ok(ips) => {
-                resolved = ips;
-                let txt: Vec<String> = resolved.iter().map(|i| i.to_string()).collect();
-                (
-                    StepStatus::Pass,
-                    format!("{host} -> {} (servers {})", txt.join(", "), list.join(", ")),
-                )
-            }
-            Err(e) => (
-                StepStatus::Fail,
-                format!("{host}: {e} (servers {})", list.join(", ")),
-            ),
-        }
-    });
-    push(s, &mut steps);
-    if cancel.is_cancelled() {
-        return steps;
+        push(s, &mut steps);
     }
-
-    // 5. TCP connect
-    let s = timed("TCP connect", || {
-        if resolved.is_empty() {
-            return (StepStatus::Skip, "no address".into());
-        }
-        let mut last = String::new();
-        for ip in resolved.iter().take(4) {
-            let addr = SocketAddr::new(*ip, port);
-            match TcpStream::connect_timeout(&addr, Duration::from_secs(5)) {
-                Ok(_) => return (StepStatus::Pass, format!("{addr} connected")),
-                Err(e) => last = format!("{addr}: {e}"),
-            }
-        }
-        (StepStatus::Fail, last)
-    });
-    let tcp_ok = s.status == StepStatus::Pass;
-    push(s, &mut steps);
-
-    // 6. clock (NET-7), before HTTPS
-    let s = timed("Clock", || {
-        let now = format_utc(std::time::SystemTime::now());
-        if clock_plausible() {
-            (StepStatus::Pass, now)
-        } else {
-            (
-                StepStatus::Fail,
-                format!(
-                    "{now} is before the app's build date {}: sync the time",
-                    format_utc(build_time())
-                ),
-            )
-        }
-    });
-    push(s, &mut steps);
-    if cancel.is_cancelled() {
-        return steps;
-    }
-
-    // 7. HTTP(S) GET of the manifest
-    let s = timed("HTTPS manifest", || {
-        if !tcp_ok && opts.proxy.is_none() {
-            return (StepStatus::Skip, "no TCP connection".into());
-        }
-        let mut o = http_options(opts.proxy.clone(), dns_servers(env));
-        o.connect_timeout = Duration::from_secs(10);
-        o.read_timeout = Duration::from_secs(15);
-        let r = xoros_core::http::HttpClient::new(&o).and_then(|c| c.get_optional(&opts.url));
-        match r {
-            Ok(Some(_)) => (StepStatus::Pass, format!("HTTP 2xx {}", opts.url)),
-            Ok(None) => (StepStatus::Fail, format!("HTTP 404 {}", opts.url)),
-            Err(e) => (StepStatus::Fail, e.to_string()),
-        }
-    });
-    push(s, &mut steps);
     steps
+}
+
+/// A step of the crate's connectivity check as a step of this test.
+pub fn from_check(r: &CheckResult) -> Step {
+    let name = match r.step {
+        CheckStep::Clock => "Clock",
+        CheckStep::Dns => "DNS",
+        CheckStep::Tcp => "TCP connect",
+        CheckStep::Https => "HTTPS manifest",
+        _ => "Check",
+    };
+    let status = match r.status {
+        CheckStatus::Passed => StepStatus::Pass,
+        CheckStatus::Failed => StepStatus::Fail,
+        _ => StepStatus::Skip,
+    };
+    let detail = if r.status == CheckStatus::Skipped {
+        "skipped after an earlier failure".to_string()
+    } else {
+        r.detail.clone()
+    };
+    Step {
+        name,
+        status,
+        detail,
+        duration: r.duration,
+    }
 }
 
 /// One line per step, for the UI and the CLI.
@@ -384,7 +351,9 @@ mod tests {
         // Empty fixture sysfs/procfs: no carrier, no route.
         assert_eq!(by("Link / carrier"), StepStatus::Fail);
         assert_eq!(by("Gateway"), StepStatus::Fail);
-        assert_eq!(by("DNS"), StepStatus::Skip);
+        // An IP literal "resolves" to itself.
+        assert_eq!(by("DNS"), StepStatus::Pass);
+        assert_eq!(by("Clock"), StepStatus::Pass);
         assert_eq!(by("TCP connect"), StepStatus::Pass);
         assert_eq!(by("HTTPS manifest"), StepStatus::Pass, "{steps:?}");
         let txt = report_text(&steps);

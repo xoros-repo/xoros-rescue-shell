@@ -630,7 +630,7 @@ fn net_cmd(app: &App, args: &[String]) -> Result<String, String> {
             let dev = update_jobs::device_target(app.backend.as_ref());
             let base = opt_value(args, "--base").unwrap_or_else(|| DEFAULT_OTA_BASE_URL.to_string());
             let url = match &dev.target {
-                Some(t) => format!("{}/manifest.json", net::http::ota_dir_url(&base, t)),
+                Some(t) => xoros_core::source::ota_url(&base, t, "manifest.json"),
                 None => base.clone(),
             };
             let opts = net::diag::TestOptions {

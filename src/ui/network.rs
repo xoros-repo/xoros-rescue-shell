@@ -15,7 +15,7 @@ use xoros_core::net::nm_keyfile::NetConfig;
 
 use crate::constants::{DEFAULT_HTTP_PROXY, DEFAULT_OTA_BASE_URL};
 use crate::net::profile::{self, ConfigInput, WifiInput};
-use crate::net::{config, diag, http, info, nm, time, wifi, NetEnv};
+use crate::net::{config, diag, info, nm, time, wifi, NetEnv};
 use crate::tasks::{TaskFailure, TaskKind};
 use crate::texts;
 use crate::ui::dialogs::{self, closable, MAX_H, MAX_W};
@@ -104,10 +104,7 @@ fn test(s: &mut Cursive) {
     let Some(a) = app(s) else { return };
     let dev = crate::update_jobs::device_target(a.backend.as_ref());
     let url = match &dev.target {
-        Some(t) => format!(
-            "{}/manifest.json",
-            http::ota_dir_url(DEFAULT_OTA_BASE_URL, t)
-        ),
+        Some(t) => xoros_core::source::ota_url(DEFAULT_OTA_BASE_URL, t, "manifest.json"),
         None => DEFAULT_OTA_BASE_URL.to_string(),
     };
     let opts = diag::TestOptions {
