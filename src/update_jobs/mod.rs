@@ -105,7 +105,7 @@ pub fn device_target(backend: &dyn SystemBackend) -> DeviceTarget {
         let suffix = Suffix::from_str(&info.suffix).ok();
         if let (Some(ts), Some(suffix)) = (ts.clone(), suffix) {
             let t = Target::new(info.version.clone(), info.machine.clone(), suffix);
-            if best.as_ref().map_or(true, |(b, _, _)| ts > *b) {
+            if best.as_ref().is_none_or(|(b, _, _)| ts > *b) {
                 best = Some((ts, slot, t));
             }
         }

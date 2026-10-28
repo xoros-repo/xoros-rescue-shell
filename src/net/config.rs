@@ -258,7 +258,7 @@ pub fn refresh_resolv_conf(env: &NetEnv) -> io::Result<Vec<IpAddr>> {
             .flatten()
             .filter(|e| e.file_name().to_string_lossy().starts_with(&prefix))
             .map(|e| e.path())
-            .filter(|p| p.extension().map_or(true, |x| x != "tmp"))
+            .filter(|p| p.extension().is_none_or(|x| x != "tmp"))
             .collect();
         files.sort();
         for f in files {

@@ -591,9 +591,10 @@ include it in the diagnostics bundle (`LOG-2`).
 
 ## 8. Non-functional requirements
 
-- **NF-1 (P1)** Rust edition 2021. The distro builds with **Rust 1.78** (`meta-rust-bin`, `cargo_bin` class), so the
-  MSRV is 1.78 and `Cargo.lock` MUST pin crate versions that build with 1.78 (`cargo +1.78 build` in CI). Crates are
-  fetched by cargo during the Yocto build; no git dependencies that need SSH.
+- **NF-1 (P1)** Rust edition 2021. The distro builds with **Rust 1.95** or newer (`meta-rust-bin`, `cargo_bin`
+  class, `XD-7` in `../xor/REQUIREMENTS.md`), so the MSRV is 1.95 and `Cargo.lock` MUST pin crate versions that build
+  with 1.95 (`cargo +1.95 build` in CI). Raised from 1.78 together with `xoros-core` (`ureq` 3, `k256` 0.14, `sha2`
+  0.11 need Rust 1.85+). Crates are fetched by cargo during the Yocto build; no git dependencies that need SSH.
 - **NF-2 (P1)** Avoid C dependencies that need extra Yocto recipes: TLS via `rustls` with the system CA bundle
   (`/etc/ssl/certs/ca-certificates.crt`) or `webpki-roots`; gzip via `flate2` with the pure Rust backend; no OpenSSL
   linking. `ncurses` is available but not needed with crossterm.

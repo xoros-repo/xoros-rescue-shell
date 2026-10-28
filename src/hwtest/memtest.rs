@@ -316,7 +316,7 @@ impl<'a> Tester<'a> {
         }
         status("bit flip");
         let p = splitmix(seed ^ 0xF11F);
-        let start = move |i: usize| if i % 2 == 0 { p } else { !p };
+        let start = move |i: usize| if i.is_multiple_of(2) { p } else { !p };
         if !self.fill(start) {
             return false;
         }

@@ -184,4 +184,4 @@ src/
 └── ui/            # cursive screens, one module per menu (only place that uses cursive)
 ```
 
-Rust 1.78 is the MSRV (`cargo +1.78.0 build`).
+Rust 1.95 is the MSRV (`cargo +1.95.0 build`).
