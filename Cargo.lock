@@ -1546,6 +1546,7 @@ dependencies = [
  "cursive",
  "cursive_buffered_backend",
  "flate2",
+ "k256",
  "libc",
  "log",
  "serde",

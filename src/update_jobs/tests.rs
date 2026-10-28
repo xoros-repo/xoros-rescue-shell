@@ -409,3 +409,64 @@ fn wrong_machine_rescue_image_and_running_slot_are_refused() {
     assert!(e.contains("running system"), "{e}");
     assert_eq!(f.b.boot_state().expect("st").try_count(Slot::B), 3);
 }
+
+/// Sign `manifest.json` in `dir` like `xor update create signature` (OTA-8): ECDSA over the
+/// SHA-256 of the manifest; returns the hex public key.
+fn sign_tree(dir: &Path, seed: u8) -> String {
+    use k256::ecdsa::signature::Signer;
+    use sha2::Digest;
+    let sk = k256::ecdsa::SigningKey::from_slice(&[seed; 32]).expect("key");
+    let bytes = fs::read(dir.join("manifest.json")).expect("manifest");
+    let digest = sha2::Sha256::digest(&bytes);
+    let sig: k256::ecdsa::Signature = sk.sign(&digest);
+    let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
+    let pk = hex(sk.verifying_key().to_encoded_point(true).as_bytes());
+    let json = serde_json::json!({"mh": hex(&digest), "ms": hex(&sig.to_bytes()), "pk": pk});
+    fs::write(dir.join("signature.json"), json.to_string()).expect("signature");
+    pk
+}
+
+#[test]
+fn signature_policy_from_settings() {
+    use crate::settings::Settings;
+    use xoros_core::source::SignatureStatus;
+    let f = fixture();
+    let load = |s: &Settings, extra: &[String]| {
+        let (policy, _) = s.signature_policy(extra);
+        load_manifest(&DirSource::new(&f.ota), None, &policy).map(|m| m.signature)
+    };
+    let mut s = Settings::default();
+    // Unsigned: fine unless required.
+    assert_eq!(load(&s, &[]).expect("unsigned"), SignatureStatus::Unsigned);
+    s.require_signature = true;
+    assert!(load(&s, &[]).is_err());
+
+    let pk = sign_tree(&f.ota, 7);
+    let other = {
+        let sk = k256::ecdsa::SigningKey::from_slice(&[9; 32]).expect("key");
+        sk.verifying_key()
+            .to_encoded_point(true)
+            .as_bytes()
+            .iter()
+            .map(|x| format!("{x:02x}"))
+            .collect::<String>()
+    };
+    // Signed, but no trusted key: required -> refused; not required -> "not checked".
+    assert!(load(&s, &[]).is_err());
+    s.require_signature = false;
+    assert_eq!(load(&s, &[]).expect("not checked"), SignatureStatus::NotChecked);
+    // The server's `pk` is never trusted by itself: a different trusted key fails.
+    s.set("trusted_keys", &other).expect("other key");
+    assert!(load(&s, &[]).is_err());
+    // Trusted from the settings or from the rescue image's key file.
+    s.set("trusted_keys", &format!("{other} {pk}")).expect("keys");
+    assert!(matches!(load(&s, &[]), Ok(SignatureStatus::Verified { .. })));
+    s.set("trusted_keys", "").expect("none");
+    assert!(matches!(load(&s, &[pk.clone()]), Ok(SignatureStatus::Verified { .. })));
+    // A changed manifest no longer matches the signature.
+    let m = f.ota.join("manifest.json");
+    let mut bytes = fs::read(&m).expect("read");
+    bytes.push(b'\n');
+    fs::write(&m, bytes).expect("write");
+    assert!(load(&s, &[pk]).is_err());
+}
