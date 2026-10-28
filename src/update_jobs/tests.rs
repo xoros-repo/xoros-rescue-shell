@@ -462,7 +462,7 @@ fn signature_policy_from_settings() {
     s.set("trusted_keys", &format!("{other} {pk}")).expect("keys");
     assert!(matches!(load(&s, &[]), Ok(SignatureStatus::Verified { .. })));
     s.set("trusted_keys", "").expect("none");
-    assert!(matches!(load(&s, &[pk.clone()]), Ok(SignatureStatus::Verified { .. })));
+    assert!(matches!(load(&s, std::slice::from_ref(&pk)), Ok(SignatureStatus::Verified { .. })));
     // A changed manifest no longer matches the signature.
     let m = f.ota.join("manifest.json");
     let mut bytes = fs::read(&m).expect("read");
