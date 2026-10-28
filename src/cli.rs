@@ -602,6 +602,11 @@ fn update_cmd(app: &App, args: &[String]) -> Result<String, String> {
 fn net_cmd(app: &App, args: &[String]) -> Result<String, String> {
     let env = net::NetEnv::for_backend(app.backend.as_ref());
     match args.first().map(String::as_str) {
+        Some("up" | "dns") => check_options(&args[1..], &[], &[])?,
+        Some("test") => check_options(&args[1..], &["--base", "--proxy"], &[])?,
+        _ => {}
+    }
+    match args.first().map(String::as_str) {
         Some("up") => {
             let rep = net::config::bring_up_ethernet(&env).map_err(|e| e.to_string())?;
             let mut t = rep.text();
