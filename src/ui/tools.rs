@@ -30,6 +30,7 @@ pub fn menu() -> Tree {
     t.leaf("Diagnostics bundle", diagnostics_bundle)
         .leaf("Subshell", subshell)
         .leaf("Remote access (SSH)", remote_access)
+        .leaf(texts::TITLE_SETTINGS, crate::ui::settings::show)
         .delimiter()
         .leaf(texts::TITLE_ABOUT, about)
 }
@@ -135,15 +136,19 @@ fn show_tasks(s: &mut Cursive) {
 
 fn subshell(s: &mut Cursive) {
     dialogs::confirm(s, "Subshell", texts::SUBSHELL_INFO, "Start", |s| {
-        let Some(app) = app(s) else { return };
-        let state = s.dump();
-        let r = crate::terminal::run_subshell(&app.backend.run_dir());
-        s.restore(state);
-        s.clear();
-        if let Err(e) = r {
-            dialogs::error(s, "Cannot start the subshell.", &e);
-        }
+        crate::ui::pin::require(s, "subshell", start_subshell);
     });
+}
+
+fn start_subshell(s: &mut Cursive) {
+    let Some(app) = app(s) else { return };
+    let state = s.dump();
+    let r = crate::terminal::run_subshell(&app.backend.run_dir());
+    s.restore(state);
+    s.clear();
+    if let Err(e) = r {
+        dialogs::error(s, "Cannot start the subshell.", &e);
+    }
 }
 
 fn about(s: &mut Cursive) {

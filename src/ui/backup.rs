@@ -31,10 +31,20 @@ const RESET_RESCUE_BOX: &str = "reset_rescue_settings";
 pub fn menu() -> Tree {
     Tree::new()
         .leaf("Export to stick", export_start)
-        .leaf("Import from stick", import_start)
+        .leaf("Import from stick", |s| {
+            crate::ui::pin::require(s, "backup import", import_start)
+        })
         .delimiter()
-        .leaf("Reset configuration", |s| reset_start(s, false))
-        .leaf("Full factory reset", |s| reset_start(s, true))
+        .leaf("Reset configuration", |s| {
+            crate::ui::pin::require(s, "configuration reset", |s| reset_start(s, false))
+        })
+        .leaf("Full factory reset", |s| {
+            crate::ui::pin::require(s, "full factory reset", |s| reset_start(s, true))
+        })
+        .delimiter()
+        .leaf("Repair file system...", crate::ui::maint::repair_start)
+        .leaf("Raw partition image...", crate::ui::maint::image_start)
+        .leaf("Safely remove stick", crate::ui::maint::safe_remove_start)
 }
 
 fn checkbox_name(role: PartitionRole) -> String {
@@ -162,13 +172,17 @@ where
             choose_stick(s, purpose, on_pick.clone());
         }
     };
+    watch_sticks(s, purpose, on_pick.clone(), &sticks);
     if sticks.is_empty() {
-        s.add_layer(closable(
-            Dialog::around(TextView::new(texts::NO_STICK).max_width(MAX_W))
-                .title(purpose)
-                .button(texts::BTN_REFRESH, refresh)
-                .dismiss_button(texts::BTN_CANCEL),
-        ));
+        s.add_layer(
+            closable(
+                Dialog::around(TextView::new(texts::NO_STICK).max_width(MAX_W))
+                    .title(purpose)
+                    .button(texts::BTN_REFRESH, refresh)
+                    .dismiss_button(texts::BTN_CANCEL),
+            )
+            .with_name(STICK_LIST),
+        );
         return;
     }
     let mut select = SelectView::<Stick>::new();
@@ -180,16 +194,71 @@ where
         s.pop_layer();
         on_pick(s, st.clone());
     });
-    s.add_layer(closable(
-        Dialog::around(
-            LinearLayout::vertical()
-                .child(TextView::new("Choose the stick:"))
-                .child(ScrollView::new(select).max_height(10)),
+    s.add_layer(
+        closable(
+            Dialog::around(
+                LinearLayout::vertical()
+                    .child(TextView::new("Choose the stick:"))
+                    .child(ScrollView::new(select).max_height(10)),
+            )
+            .title(purpose)
+            .button(texts::BTN_REFRESH, refresh)
+            .dismiss_button(texts::BTN_CANCEL),
         )
-        .title(purpose)
-        .button(texts::BTN_REFRESH, refresh)
-        .dismiss_button(texts::BTN_CANCEL),
-    ));
+        .with_name(STICK_LIST),
+    );
+}
+
+/// Name of the stick list layer (hot-plug refresh, USB-1).
+const STICK_LIST: &str = "stick_list";
+
+/// Generation of the open stick list; a watcher stops when a newer list was opened.
+static STICK_LIST_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// USB-1 hot-plug: poll the sticks every 2 s while the list is open and rebuild it when a
+/// stick appears or disappears.
+fn watch_sticks<F>(s: &mut Cursive, purpose: &'static str, on_pick: F, shown: &[Stick])
+where
+    F: Fn(&mut Cursive, Stick) + Clone + Send + Sync + 'static,
+{
+    use std::sync::atomic::Ordering;
+    let Some(app) = app(s) else { return };
+    let gen = STICK_LIST_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+    let mut known: Vec<String> = shown.iter().map(|st| st.id.clone()).collect();
+    known.sort();
+    let sink = s.cb_sink().clone();
+    let spawned = std::thread::Builder::new()
+        .name("stick-watch".into())
+        .spawn(move || {
+            // At most 30 minutes per list.
+            for _ in 0..900 {
+                std::thread::sleep(crate::sticks::POLL_INTERVAL);
+                if STICK_LIST_GEN.load(Ordering::SeqCst) != gen {
+                    return;
+                }
+                let now = crate::sticks::ids(app.backend.as_ref());
+                if now == known {
+                    continue;
+                }
+                known = now;
+                let on_pick = on_pick.clone();
+                let _ = sink.send(Box::new(move |s: &mut Cursive| {
+                    if STICK_LIST_GEN.load(Ordering::SeqCst) != gen {
+                        return;
+                    }
+                    // Only when the list is the top layer (not behind a dialog opened from it).
+                    if s.screen_mut().find_layer_from_name(STICK_LIST)
+                        == Some(cursive::views::LayerPosition::FromFront(0))
+                    {
+                        s.pop_layer();
+                        choose_stick(s, purpose, on_pick);
+                    }
+                }));
+            }
+        });
+    if let Err(e) = spawned {
+        log::warn!("stick hot-plug watch not started: {e}");
+    }
 }
 
 // --------------------------------------------------------------------------------------------

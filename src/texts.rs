@@ -133,3 +133,33 @@ pub const FSCK_REPAIR_WORD: &str = "REPAIR";
 pub const SSH_INFO: &str = "Remote support: starts sshd with a one-time root password. \
 Anyone on the network who knows the password can log in as root. Stop it when done; it also \
 stops when the rescue shell exits. Public keys can be loaded from 'authorized_keys' on a stick.";
+
+// --- Settings, PIN, partition maintenance, sticks (CFG-*, BAK-6/7, USB-5) ---
+
+pub const TITLE_SETTINGS: &str = "Settings";
+pub const TITLE_PIN: &str = "PIN";
+
+pub const SETTINGS_INTRO: &str = "Stored on the overlay partition (rescue/rescue-shell.toml), \
+so they survive slot updates. Lists: separated by spaces.";
+
+pub const SETTINGS_READ_ONLY: &str = "The overlay partition is not available: these are the \
+built-in defaults and cannot be saved.";
+
+pub const PIN_INFO: &str = "The PIN is asked before destructive actions (writing slots, \
+importing backups, factory reset, re-creating file systems), the settings and the subshell. \
+4 to 12 digits.";
+
+pub const PIN_PROMPT: &str = "Enter the PIN:";
+
+pub const PIN_LOCKED: &str = "Too many wrong PINs. Wait a minute and try again.";
+
+pub const MKFS_EXPLANATION: &str = "Runs e2fsck -y on the partition and tries to mount it. If \
+it still cannot be mounted, the file system can be re-created (this ERASES everything on the \
+partition; restore a backup afterwards).";
+
+pub const IMAGE_EXPLANATION: &str = "Copies the whole partition, gzip-compressed, to a stick \
+(.img.gz with a .sha256 file; split into 4 GiB parts on FAT). For forensic use; nothing on \
+the device is changed.";
+
+pub const DOWNGRADE_CONFIRM: &str = "The selected build is the SAME or OLDER than the build \
+installed in the target slot. Install it anyway (downgrade)?";

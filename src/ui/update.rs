@@ -38,6 +38,8 @@ pub fn menu() -> Tree {
     Tree::new()
         .leaf("From network (OTA)", ota_start)
         .leaf("From USB stick", usb_start)
+        .delimiter()
+        .leaf("Safely remove stick", crate::ui::maint::safe_remove_start)
 }
 
 fn field(label: &str, name: &str, value: &str) -> LinearLayout {
@@ -306,18 +308,26 @@ fn confirm_write(s: &mut Cursive, c: CheckResult, row: ImageRow, targets: Target
         targets,
         options: FlashOptions::default(),
     };
+    // OTA-3: a downgrade needs an extra confirmation; CFG-2: then the PIN.
+    let downgrade = row.is_downgrade(targets);
+    let go = move |s: &mut Cursive| {
+        let req = req.clone();
+        let write = move |s: &mut Cursive| {
+            let req = req.clone();
+            crate::ui::pin::require(s, "slot update", move |s| start_write(s, req.clone()));
+        };
+        if downgrade {
+            dialogs::confirm(s, texts::TITLE_CONFIRM, texts::DOWNGRADE_CONFIRM, "Downgrade", write);
+        } else {
+            write(s);
+        }
+    };
     if targets == Targets::Both {
-        dialogs::confirm_typed(
-            s,
-            "Write both slots",
-            &text,
-            WRITE_BOTH_CONFIRM_WORD,
-            move |s, _| start_write(s, req.clone()),
-        );
-    } else {
-        dialogs::confirm(s, texts::TITLE_CONFIRM, &text, "Write", move |s| {
-            start_write(s, req.clone())
+        dialogs::confirm_typed(s, "Write both slots", &text, WRITE_BOTH_CONFIRM_WORD, move |s, _| {
+            go(s)
         });
+    } else {
+        dialogs::confirm(s, texts::TITLE_CONFIRM, &text, "Write", go);
     }
 }
 
