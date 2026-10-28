@@ -354,13 +354,17 @@ pub fn time_cmd(app: &App, args: &[String]) -> Option<Result<String, String>> {
     }
     let dev = std::path::Path::new(crate::constants::RTC_DEVICE);
     Some(match args.get(1).map(String::as_str) {
-        Some("show") | None if args.len() <= 2 => match crate::net::time::rtc_text() {
-            Some(t) => Ok(format!("{t}\n")),
-            None => Err(format!(
-                "No hardware clock ({} does not exist).",
-                dev.display()
-            )),
-        },
+        Some("show") | None if args.len() <= 2 => {
+            if !dev.exists() {
+                Err(format!(
+                    "No hardware clock ({} does not exist).",
+                    dev.display()
+                ))
+            } else {
+                crate::rtc::read(dev)
+                    .map(|t| format!("{} ({})\n", crate::net::time::format_utc(t), dev.display()))
+            }
+        }
         Some("write") if args.len() == 2 => {
             let now = std::time::SystemTime::now();
             if !crate::net::time::clock_plausible() {
