@@ -196,13 +196,13 @@ impl Aligned {
 }
 
 /// Write the pattern over the first `size` bytes (a multiple of 4 KiB), then read it back.
-/// `tick(phase, bytes)` is called per block and returns `false` to cancel (`Err(())`).
+/// `tick(phase, bytes)` is called per block and returns `false` to cancel (`None`).
 pub fn write_read(
     dev: &dyn StickIo,
     size: u64,
     seed: u64,
     tick: &mut dyn FnMut(Phase, u64) -> bool,
-) -> Result<StickStats, ()> {
+) -> Option<StickStats> {
     let mut st = StickStats {
         tested: size,
         ..StickStats::default()
@@ -222,7 +222,7 @@ pub fn write_read(
             write_errors.push((off, len as u64));
         }
         if !tick(Phase::Write, len as u64) {
-            return Err(());
+            return None;
         }
         off += len as u64;
     }
@@ -255,12 +255,12 @@ pub fn write_read(
             }
         }
         if !tick(Phase::Read, len as u64) {
-            return Err(());
+            return None;
         }
         off += len as u64;
     }
     st.read_time = t1.elapsed();
-    Ok(st)
+    Some(st)
 }
 
 fn speed(bytes: u64, d: Duration) -> String {
@@ -475,7 +475,7 @@ pub fn run(
         reread_partitions(&f);
     }
     drop(f);
-    let st = r.map_err(|()| {
+    let st = r.ok_or_else(|| {
         log::warn!("TST-8: cancelled; {} is partly overwritten", req.disk);
         TaskFailure::Cancelled
     })?;
@@ -598,7 +598,7 @@ mod tests {
             calls += 1;
             calls < 2
         })
-        .is_err());
+        .is_none());
         let mut u = vec![0u8; UNIT];
         fill_unit(&mut u, 5, 8192);
         assert_eq!(check_unit(&u, 5, 8192, MIB), UnitState::Good);

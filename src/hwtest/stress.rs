@@ -184,7 +184,7 @@ pub fn run(
     ctx: &TaskCtx,
 ) -> Result<TestReport, TaskFailure> {
     let cpus = std::thread::available_parallelism().map_or(1, |n| n.get());
-    let seed = 0x5EED_0F_C0DE;
+    let seed = 0x5EED_C0DE_0F0F;
     let expected = work_unit(seed);
     let stop = Arc::new(AtomicBool::new(false));
     let units = Arc::new(AtomicU64::new(0));
