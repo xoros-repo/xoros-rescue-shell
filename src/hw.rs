@@ -179,7 +179,8 @@ pub fn parse_uptime(text: &str) -> Option<u64> {
     }
 }
 
-fn read_temperatures(paths: &HostPaths) -> Vec<Temperature> {
+/// CPU and other thermal zones (`/sys/class/thermal/thermal_zone*`), SYS-2 and TST-9.
+pub fn read_temperatures(paths: &HostPaths) -> Vec<Temperature> {
     let dir = paths.sys("class/thermal");
     let Ok(entries) = fs::read_dir(&dir) else {
         return Vec::new();

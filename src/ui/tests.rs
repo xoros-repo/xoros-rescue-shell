@@ -40,6 +40,7 @@ pub fn menu() -> Tree {
         .leaf("File system check...", fsck_start)
         .leaf("Disk health...", health_start)
         .leaf("Stick write test (destructive)...", stick_start)
+        .leaf("CPU stress test...", stress_start)
         .delimiter()
         .leaf(texts::TITLE_TEST_RESULTS, show_results)
 }
@@ -450,4 +451,36 @@ fn stick_confirm(s: &mut Cursive, d: crate::backend::BlockDevice) {
             }),
         )
     });
+}
+
+// --- TST-9 ---
+
+const STRESS_MINUTES: &str = "test_stress_minutes";
+
+fn stress_start(s: &mut Cursive) {
+    use crate::hwtest::stress;
+    pop_to_base(s);
+    let layout = LinearLayout::vertical()
+        .child(TextView::new(texts::STRESS_INTRO).max_width(MAX_W))
+        .child(TextView::new(" "))
+        .child(number_field("Minutes (1..120)", STRESS_MINUTES, stress::DEFAULT_MINUTES));
+    s.add_layer(closable(
+        Dialog::around(layout)
+            .title(texts::TITLE_STRESS)
+            .button(texts::BTN_START, |s| {
+                let Some(m) = read_number(s, STRESS_MINUTES).filter(|m| stress::MINUTES_RANGE.contains(m))
+                else {
+                    dialogs::info(s, texts::TITLE_STRESS, "Enter 1..120 minutes.");
+                    return;
+                };
+                s.pop_layer();
+                run_test(
+                    s,
+                    TestRequest::Stress(stress::StressOptions {
+                        duration: std::time::Duration::from_secs(u64::from(m) * 60),
+                    }),
+                );
+            })
+            .dismiss_button(texts::BTN_CANCEL),
+    ));
 }

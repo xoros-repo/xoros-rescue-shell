@@ -159,3 +159,9 @@ destroyed. The boot disk is never offered.";
 
 pub const STICKTEST_AFTER: &str = "The stick now has no partition table or file system: \
 create them again before using it (e.g. on a PC).";
+
+pub const TITLE_STRESS: &str = "CPU stress test";
+
+pub const STRESS_INTRO: &str = "Loads all CPU cores with a self-checking computation and \
+samples the temperature and (Raspberry Pi) the throttling and under-voltage flags. Wrong \
+results, under-voltage, throttling or temperatures from 85 C are reported.";

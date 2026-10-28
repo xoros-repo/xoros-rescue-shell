@@ -4,13 +4,14 @@
 
 use crate::app::App;
 use crate::cli::check_test_args;
-use crate::hwtest::{memtest86, sticktest, TestRequest};
+use crate::hwtest::{memtest86, sticktest, stress, TestRequest};
 
 pub const USAGE: &str = "\
   xoros-rescue-shell [--sim <dir>] --cli test memtest86 [--reboot]
   xoros-rescue-shell [--sim <dir>] --cli test health [<disk>...]
   xoros-rescue-shell [--sim <dir>] --cli test stick [<disk> --confirm ERASE]
                      (without a disk: list the disks that can be tested)
+  xoros-rescue-shell [--sim <dir>] --cli test stress [--minutes N]
 ";
 
 /// Words of `args` that are not options.
@@ -64,6 +65,20 @@ pub fn test_request(app: &App, word: &str, args: &[String]) -> Option<Result<Tes
             Ok(TestRequest::Stick(sticktest::StickTestRequest {
                 disk: disk.clone(),
                 confirmation,
+            }))
+        })(),
+        "stress" => (|| {
+            check_test_args(args, &["--minutes"], &[], false)?;
+            let minutes = match opt_value(args, "--minutes") {
+                Some(v) => v
+                    .parse::<u32>()
+                    .ok()
+                    .filter(|m| stress::MINUTES_RANGE.contains(m))
+                    .ok_or_else(|| format!("--minutes must be 1..120, not '{v}'."))?,
+                None => stress::DEFAULT_MINUTES,
+            };
+            Ok(TestRequest::Stress(stress::StressOptions {
+                duration: std::time::Duration::from_secs(u64::from(minutes) * 60),
             }))
         })(),
         _ => return None,
@@ -183,6 +198,14 @@ mod tests {
                 confirmation: "ERASE".into()
             })))
         );
+        assert_eq!(
+            req("stress", &["--minutes", "2"]),
+            Some(Ok(TestRequest::Stress(stress::StressOptions {
+                duration: std::time::Duration::from_secs(120)
+            })))
+        );
+        assert!(matches!(req("stress", &["--minutes", "0"]), Some(Err(_))));
+        assert!(matches!(req("stress", &["5"]), Some(Err(_))));
         let list = sticktest::candidates(app.backend.as_ref()).expect("list");
         assert_eq!(list.len(), 1);
         assert!(sticktest::label(&list[0]).starts_with("sdb "));
