@@ -58,6 +58,8 @@ pub enum TestKind {
     StickTest,
     /// TST-9.
     CpuStress,
+    /// NET-4 (P2): download speed of one OTA chunk.
+    NetSpeed,
 }
 
 impl TestKind {
@@ -72,6 +74,7 @@ impl TestKind {
             TestKind::DiskHealth => "Disk health",
             TestKind::StickTest => "Stick write test",
             TestKind::CpuStress => "CPU stress test",
+            TestKind::NetSpeed => "Network speed test",
         }
     }
 
@@ -86,6 +89,7 @@ impl TestKind {
             TestKind::DiskHealth => "TST-7",
             TestKind::StickTest => "TST-8",
             TestKind::CpuStress => "TST-9",
+            TestKind::NetSpeed => "NET-4",
         }
     }
 
@@ -101,6 +105,7 @@ impl TestKind {
             TestKind::DiskHealth => "disk-health.txt",
             TestKind::StickTest => "stick-test.txt",
             TestKind::CpuStress => "cpu-stress.txt",
+            TestKind::NetSpeed => "net-speed.txt",
         }
     }
 }
@@ -365,6 +370,7 @@ pub enum TestRequest {
     /// Destructive write/read-back test of an external disk.
     Stick(sticktest::StickTestRequest),
     Stress(stress::StressOptions),
+    NetSpeed(crate::net::speed::SpeedOptions),
 }
 
 impl TestRequest {
@@ -379,6 +385,7 @@ impl TestRequest {
             TestRequest::Health(_) => TestKind::DiskHealth,
             TestRequest::Stick(_) => TestKind::StickTest,
             TestRequest::Stress(_) => TestKind::CpuStress,
+            TestRequest::NetSpeed(_) => TestKind::NetSpeed,
         }
     }
 
@@ -490,6 +497,12 @@ pub fn run_request(env: &TestEnv, req: &TestRequest, ctx: &TaskCtx) -> TestResul
         TestRequest::Stress(o) => {
             let paths = backend.host_paths();
             run_recorded(store, kind, "CPU", ctx, |ctx| stress::run(&paths, o, ctx))
+        }
+        TestRequest::NetSpeed(o) => {
+            let env = crate::net::NetEnv::for_backend(backend);
+            run_recorded(store, kind, &o.base_url, ctx, |ctx| {
+                crate::net::speed::run(backend, &env, o, ctx)
+            })
         }
     }
 }

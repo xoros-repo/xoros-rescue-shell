@@ -40,6 +40,13 @@ pub fn menu() -> Tree {
         .leaf("Ethernet DHCP", dhcp)
         .leaf("Configure", configure)
         .leaf("Test", test)
+        .leaf("Speed test", |s| {
+            pop_to_base(s);
+            crate::ui::tests::run_test(
+                s,
+                crate::hwtest::TestRequest::NetSpeed(crate::net::speed::SpeedOptions::default()),
+            );
+        })
         .leaf("Date and time", date_time)
         .delimiter()
         .leaf("Remembered settings", remembered)

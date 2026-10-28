@@ -242,7 +242,7 @@ fn run_cli_job<T: Send + 'static>(
 }
 
 /// Run a job in a task of `kind`, printing progress to stderr.
-fn run_cli_task<T: Send + 'static>(
+pub(crate) fn run_cli_task<T: Send + 'static>(
     app: &App,
     name: &str,
     kind: TaskKind,
@@ -646,8 +646,9 @@ fn net_cmd(app: &App, args: &[String]) -> Result<String, String> {
                 Ok(text)
             }
         }
+        Some("speed") => crate::cli_tests::net_speed(app, &args[1..]),
         _ => crate::cli_net::net_cmd(app, args).unwrap_or_else(|| {
-            Err("net needs: up | dns | test | show | scan | config | unconfig | list | \
+            Err("net needs: up | dns | test | speed | show | scan | config | unconfig | list | \
                  remember | forget | export-nm | nm-list | import-nm."
                 .into())
         }),

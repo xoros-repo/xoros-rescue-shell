@@ -7,11 +7,12 @@ use crate::cli::check_test_args;
 use crate::hwtest::{memtest86, sticktest, stress, TestRequest};
 
 pub const USAGE: &str = "\
-  xoros-rescue-shell [--sim <dir>] --cli test memtest86 [--reboot]
+\x20 xoros-rescue-shell [--sim <dir>] --cli test memtest86 [--reboot]
   xoros-rescue-shell [--sim <dir>] --cli test health [<disk>...]
   xoros-rescue-shell [--sim <dir>] --cli test stick [<disk> --confirm ERASE]
                      (without a disk: list the disks that can be tested)
   xoros-rescue-shell [--sim <dir>] --cli test stress [--minutes N]
+  xoros-rescue-shell [--sim <dir>] --cli net speed [--base <url>] [--proxy <url>]
 ";
 
 /// Words of `args` that are not options.
@@ -140,6 +141,32 @@ fn memtest86_cmd(app: &App, args: &[String]) -> Result<String, String> {
     }
 }
 
+/// `net speed [--base <url>] [--proxy <url>]` (NET-4 P2): download one OTA chunk; the result
+/// is recorded with the test results. Exit code 1 if it failed.
+pub fn net_speed(app: &App, args: &[String]) -> Result<String, String> {
+    use crate::net::speed::SpeedOptions;
+    check_test_args(args, &["--base", "--proxy"], &[], false)?;
+    let mut opts = SpeedOptions::default();
+    if let Some(b) = opt_value(args, "--base") {
+        crate::net::http::check_base_url(&b)?;
+        opts.base_url = b;
+    }
+    if let Some(p) = opt_value(args, "--proxy") {
+        opts.proxy = Some(p).filter(|p| !p.is_empty());
+    }
+    let req = TestRequest::NetSpeed(opts);
+    let env = crate::hwtest::TestEnv::of(app);
+    let (kind, title) = (req.task_kind(), req.kind().title());
+    let r = crate::cli::run_cli_task(app, title, kind, move |ctx| {
+        Ok(crate::hwtest::run_request(&env, &req, ctx))
+    })?;
+    if r.outcome.exit_code() == 0 {
+        Ok(r.text())
+    } else {
+        Err(r.text())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,6 +233,8 @@ mod tests {
         );
         assert!(matches!(req("stress", &["--minutes", "0"]), Some(Err(_))));
         assert!(matches!(req("stress", &["5"]), Some(Err(_))));
+        assert!(net_speed(&app, &a(&["--bsae", "http://x"])).is_err());
+        assert!(net_speed(&app, &a(&["--base", "ftp://x"])).is_err());
         let list = sticktest::candidates(app.backend.as_ref()).expect("list");
         assert_eq!(list.len(), 1);
         assert!(sticktest::label(&list[0]).starts_with("sdb "));

@@ -12,7 +12,7 @@ use crate::net::{self, NetEnv};
 use crate::tasks::TaskFailure;
 
 pub const USAGE: &str = "\
-  xoros-rescue-shell [--sim <dir>] --cli net show [--json]
+\x20 xoros-rescue-shell [--sim <dir>] --cli net show [--json]
   xoros-rescue-shell [--sim <dir>] --cli net scan <if>
   xoros-rescue-shell [--sim <dir>] --cli net config <if> dhcp|static [<addr>/<prefix>]
                      [--gateway <ip>] [--dns <ip>[,<ip>...]] [--wifi <ssid> [--hidden]

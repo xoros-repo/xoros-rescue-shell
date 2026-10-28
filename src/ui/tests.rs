@@ -46,7 +46,7 @@ pub fn menu() -> Tree {
 }
 
 /// Run a test in the background (progress dialog with Cancel), then show its result.
-fn run_test(s: &mut Cursive, req: TestRequest) {
+pub fn run_test(s: &mut Cursive, req: TestRequest) {
     let kind = req.kind();
     jobs::run(
         s,
