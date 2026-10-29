@@ -24,11 +24,11 @@ sha2 = "0.11.1"
 tar = { version = "0.4", default-features = false }
 flate2 = "1"
 
-# Shared device/boot/OTA logic (CORE-1). Development form: a path dependency on a sibling
-# checkout of xoros-xor-tool. Release form (CORE-1, XD-6; the Yocto recipe redirects it with a
-# cargo [patch], so keep this exact URL):
-# xoros-core = { git = "ssh://git@github.com/xoros-repo/xoros-xor-tool.git", rev = "<commit>" }
-xoros-core = { path = "../xoros-xor-tool/xoros-core" }
+# Shared device/boot/OTA logic (xoros-core).
+# Development form: a path dependency on a sibling checkout of xoros-xor-tool.
+# Release form (Yocto recipe redirects it with a cargo [patch], so keep this exact URL):
+xoros-core = { git = "ssh://git@github.com/xoros-repo/xoros-xor-tool.git", rev = "25c338b44015ebeb87d067ad2025fce4708afa8d" }
+#xoros-core = { path = "../xoros-xor-tool/xoros-core" }
 
 [profile.release]
 lto = true
