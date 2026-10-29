@@ -1,0 +1,1084 @@
+//! Command line parsing and the non-interactive CLI (ARCH-2): status, backup, update, net,
+//! time.
+
+use std::path::PathBuf;
+
+use crate::app::App;
+use crate::constants::{APP_NAME, APP_VERSION, SIM_ENV_VAR};
+use std::sync::{Arc, Mutex};
+
+use crate::backend::Stick;
+use crate::backup::{ImportMode, PartitionRole};
+use crate::backend::{PartRole, Slot};
+use crate::backup_jobs;
+use crate::hwtest;
+use crate::constants::WRITE_BOTH_CONFIRM_WORD;
+use crate::net;
+use crate::slots::RescueCheck;
+use crate::update_jobs;
+use xoros_core::env::Suffix;
+use xoros_core::manifest::Target;
+use crate::tasks::{lock, TaskCtx, TaskFailure, TaskKind, TaskState};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Command {
+    /// Start the TUI (default).
+    Tui,
+    /// `--cli status [--json] [--no-hash]`.
+    Status {
+        json: bool,
+        hash: bool,
+    },
+    /// `--cli backup <args>` (ARCH-2, BAK-*, RST-*).
+    Backup(Vec<String>),
+    /// `--cli update <args>` (OTA-*, USB-*).
+    Update(Vec<String>),
+    /// `--cli net <args>` (NET-1, NET-3, NET-4).
+    Net(Vec<String>),
+    /// `--cli time <args>` (NET-7).
+    Time(Vec<String>),
+    /// `--cli test <args>` (TST-*).
+    Test(Vec<String>),
+    /// `--cli report <args>` (SYS-5), `--cli diag <args>` (LOG-2), `--cli ssh <args>` (SSH-1).
+    Report(Vec<String>),
+    Diag(Vec<String>),
+    Ssh(Vec<String>),
+    /// `--cli boot|power|settings|stick <args>` (BOOT-*, PWR-*, CFG-*, USB-5; `cli_admin`).
+    Boot(Vec<String>),
+    Power(Vec<String>),
+    Settings(Vec<String>),
+    Stick(Vec<String>),
+    /// `--sim-init <dir>`: write an example simulation directory.
+    SimInit(PathBuf),
+    Help,
+    Version,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Options {
+    pub sim: Option<PathBuf>,
+    pub command: Command,
+}
+
+pub fn usage() -> String {
+    format!(
+        "{APP_NAME} {APP_VERSION}
+
+Usage:
+  xoros-rescue-shell [--sim <dir>]                  start the TUI
+  xoros-rescue-shell [--sim <dir>] --cli status [--json] [--no-hash]
+  xoros-rescue-shell [--sim <dir>] --cli backup sticks
+  xoros-rescue-shell [--sim <dir>] --cli backup list <stick>
+  xoros-rescue-shell [--sim <dir>] --cli backup export <stick> [overlay] [application]
+  xoros-rescue-shell [--sim <dir>] --cli backup verify <stick> <name>
+  xoros-rescue-shell [--sim <dir>] --cli backup import <stick> <name> [--merge] [overlay] [application]
+  xoros-rescue-shell [--sim <dir>] --cli backup reset config|full --confirm RESET [--reset-rescue]
+  xoros-rescue-shell [--sim <dir>] --cli update check [<source options>] [--no-hash]
+  xoros-rescue-shell [--sim <dir>] --cli update scan <stick>
+  xoros-rescue-shell [--sim <dir>] --cli update start --slot A|B|AB [<source options>] [--image <timestamp>]
+                     [--allow-downgrade] [--allow-unverified] [--no-resume] [--confirm WRITE]
+  xoros-rescue-shell [--sim <dir>] --cli net up | dns | test [--base <url>] [--proxy <url>]
+  xoros-rescue-shell [--sim <dir>] --cli time show | sync [<server>...] | set 'YYYY-MM-DD HH:MM[:SS]'
+  xoros-rescue-shell [--sim <dir>] --cli test slots [A|B] [--no-files] [--manifest auto|none] [<source>]
+  xoros-rescue-shell [--sim <dir>] --cli test rescue
+  xoros-rescue-shell [--sim <dir>] --cli test memory [--percent N] [--passes N]
+  xoros-rescue-shell [--sim <dir>] --cli test disk [--device disk|<partition label>|<kernel name>]
+  xoros-rescue-shell [--sim <dir>] --cli test fsck [overlay] [application] [--repair --confirm REPAIR]
+  xoros-rescue-shell [--sim <dir>] --cli test results [--json]
+{}{}{}  xoros-rescue-shell --sim-init <dir>               create an example simulation dir
+  xoros-rescue-shell --help | --version
+
+Options:
+  --sim <dir>   simulation mode: use <dir>/sim.json instead of the device
+                (also env {SIM_ENV_VAR}=<dir>)
+  --json        machine readable output
+  --no-hash     do not compute the rescue image SHA-256
+
+Update sources (default: the OTA server for the newest valid slot):
+  --base <url> [--proxy <url>] [--version <v>] [--machine <m>] [--suffix <s>]
+  --stick <id> --path <dir or image on the stick>   (see 'update scan')
+  (test slots: where to look for the OTA manifest of the slot's build; default: sticks,
+  then the OTA server)
+
+Exit codes:
+  0  success (a test passed, possibly with warnings)
+  1  error: the operation failed or completed only partly, a test could not run or was
+     cancelled
+  2  the command line could not be parsed
+  3  a test ran and found a problem (FAIL)
+",
+        crate::cli_tests::USAGE,
+        crate::cli_net::USAGE,
+        crate::cli_admin::USAGE
+    )
+}
+
+/// Parse arguments (without the program name).
+pub fn parse_args<I, S>(args: I) -> Result<Options, String>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
+    let mut it = args.into_iter().map(Into::into);
+    let mut sim = None;
+    let mut command = Command::Tui;
+    let mut cli: Option<Vec<String>> = None;
+    while let Some(a) = it.next() {
+        if let Some(rest) = cli.as_mut() {
+            rest.push(a);
+            continue;
+        }
+        match a.as_str() {
+            "--sim" => {
+                let d = it.next().ok_or("--sim needs a directory")?;
+                sim = Some(PathBuf::from(d));
+            }
+            "--sim-init" => {
+                let d = it.next().ok_or("--sim-init needs a directory")?;
+                command = Command::SimInit(PathBuf::from(d));
+            }
+            "--cli" => cli = Some(Vec::new()),
+            "-h" | "--help" => command = Command::Help,
+            "-V" | "--version" => command = Command::Version,
+            other => {
+                if let Some(d) = other.strip_prefix("--sim=") {
+                    sim = Some(PathBuf::from(d));
+                } else {
+                    return Err(format!("Unknown argument '{other}'."));
+                }
+            }
+        }
+    }
+    if let Some(rest) = cli {
+        let mut words = rest.iter().map(String::as_str);
+        match words.next() {
+            Some("status") => {
+                let (mut json, mut hash) = (false, true);
+                for w in words {
+                    match w {
+                        "--json" => json = true,
+                        "--no-hash" => hash = false,
+                        "--sim" => return Err("Put --sim before --cli.".into()),
+                        other => return Err(format!("Unknown status option '{other}'.")),
+                    }
+                }
+                command = Command::Status { json, hash };
+            }
+            Some("backup") => command = Command::Backup(words.map(str::to_string).collect()),
+            Some("update") => command = Command::Update(words.map(str::to_string).collect()),
+            Some("net") => command = Command::Net(words.map(str::to_string).collect()),
+            Some("time") => command = Command::Time(words.map(str::to_string).collect()),
+            Some("report") => command = Command::Report(words.map(str::to_string).collect()),
+            Some("diag") => command = Command::Diag(words.map(str::to_string).collect()),
+            Some("ssh") => command = Command::Ssh(words.map(str::to_string).collect()),
+            Some("test") => command = Command::Test(words.map(str::to_string).collect()),
+            Some("boot") => command = Command::Boot(words.map(str::to_string).collect()),
+            Some("power") => command = Command::Power(words.map(str::to_string).collect()),
+            Some("settings") => command = Command::Settings(words.map(str::to_string).collect()),
+            Some("stick") => command = Command::Stick(words.map(str::to_string).collect()),
+            Some(other) => {
+                return Err(format!(
+                    "CLI command '{other}' is not implemented yet \
+                     (available: status, backup, update, net, time, test, report, diag, ssh, \
+                     boot, power, settings, stick)."
+                ))
+            }
+            None => {
+                return Err(
+                    "--cli needs a command (status, backup, update, net, time, test, report, diag, \
+                     ssh, boot, power, settings, stick)."
+                        .into(),
+                )
+            }
+        }
+    }
+    Ok(Options { sim, command })
+}
+
+/// `--cli status`: print the status; returns the process exit code.
+pub fn run_status(app: &App, json: bool, hash: bool) -> i32 {
+    if hash {
+        match app.start_rescue_check(None) {
+            Ok(h) => {
+                h.wait();
+            }
+            Err(e) => *lock(&app.rescue_check) = RescueCheck::Failed(e.to_string()),
+        }
+    }
+    let st = app.status();
+    if json {
+        match serde_json::to_string_pretty(&st) {
+            Ok(s) => {
+                println!("{s}");
+                0
+            }
+            Err(e) => {
+                eprintln!("error: cannot encode status: {e}");
+                1
+            }
+        }
+    } else {
+        print!("{}", crate::report::status_text(&st));
+        0
+    }
+}
+
+fn find_stick(app: &App, id: &str) -> Result<Stick, String> {
+    app.backend
+        .external_sticks()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|s| s.id == id)
+        .ok_or_else(|| format!("No stick '{id}' (see 'backup sticks')."))
+}
+
+/// Partition names in `args`; all of them when none is given.
+fn roles_arg(args: &[String]) -> Result<Vec<PartitionRole>, String> {
+    let mut roles = Vec::new();
+    for a in args.iter().filter(|a| !a.starts_with("--")) {
+        roles.push(PartitionRole::from_name(a).ok_or_else(|| format!("Unknown partition '{a}'."))?);
+    }
+    if roles.is_empty() {
+        roles = PartitionRole::ALL.to_vec();
+    }
+    Ok(roles)
+}
+
+/// Run a job like the UI does: in a write task, printing progress to stderr.
+fn run_cli_job<T: Send + 'static>(
+    app: &App,
+    name: &str,
+    body: impl FnOnce(&TaskCtx) -> Result<T, TaskFailure> + Send + 'static,
+) -> Result<T, String> {
+    run_cli_task(app, name, TaskKind::Write, body)
+}
+
+/// Run a job in a task of `kind`, printing progress to stderr.
+pub(crate) fn run_cli_task<T: Send + 'static>(
+    app: &App,
+    name: &str,
+    kind: TaskKind,
+    body: impl FnOnce(&TaskCtx) -> Result<T, TaskFailure> + Send + 'static,
+) -> Result<T, String> {
+    let out: Arc<Mutex<Option<T>>> = Arc::new(Mutex::new(None));
+    let o = Arc::clone(&out);
+    let h = app
+        .tasks
+        .spawn(
+            name,
+            kind,
+            move |ctx| {
+                let v = body(ctx)?;
+                *lock(&o) = Some(v);
+                Ok(String::new())
+            },
+            None,
+        )
+        .map_err(|e| e.to_string())?;
+    let mut last = String::new();
+    let snap = loop {
+        let snap = h.snapshot();
+        if snap.is_finished() {
+            break snap;
+        }
+        let pct = snap
+            .fraction()
+            .map(|f| format!(" {:>3}%", (f * 100.0) as u32))
+            .unwrap_or_default();
+        let line = format!("{}{pct}", snap.message);
+        if line != last && !snap.message.is_empty() {
+            eprintln!("{line}");
+            last = line;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    };
+    match snap.state {
+        TaskState::Succeeded(_) => lock(&out).take().ok_or_else(|| "no result".to_string()),
+        TaskState::Cancelled => Err("Cancelled.".into()),
+        TaskState::Failed(e) => Err(e),
+        TaskState::Running => Err("still running".into()),
+    }
+}
+
+fn backup_cmd(app: &App, args: &[String]) -> Result<String, String> {
+    let backend = Arc::clone(&app.backend);
+    let arg = |i: usize, what: &str| {
+        args.get(i)
+            .cloned()
+            .ok_or_else(|| format!("backup {}: missing {what}.", args[0]))
+    };
+    match args.first().map(String::as_str) {
+        Some("sticks") => {
+            let sticks = backend.external_sticks().map_err(|e| e.to_string())?;
+            Ok(sticks
+                .iter()
+                .map(|s| format!("{}\t{}\n", s.id, s.description))
+                .collect())
+        }
+        Some("list") => {
+            let stick = find_stick(app, &arg(1, "stick")?)?;
+            let machine = backup_jobs::device_identity(backend.as_ref()).machine;
+            let list = backup_jobs::list_stick_backups(backend.as_ref(), &stick)?;
+            Ok(list
+                .iter()
+                .map(|b| backup_jobs::describe_backup(b, machine.as_deref()) + "\n")
+                .collect())
+        }
+        Some("export") => {
+            let stick = find_stick(app, &arg(1, "stick")?)?;
+            let req = backup_jobs::ExportRequest {
+                roles: roles_arg(&args[2..])?,
+                stick: stick.clone(),
+            };
+            let preview = backup_jobs::export_preview(backend.as_ref(), &req)?;
+            eprint!("{}", preview.text());
+            let rep = run_cli_job(app, "Backup export", move |ctx| {
+                backup_jobs::run_export(backend.as_ref(), &req, ctx)
+            })?;
+            Ok(backup_jobs::export_summary(&rep, &stick) + "\n")
+        }
+        Some(cmd @ ("verify" | "import")) => {
+            let stick = find_stick(app, &arg(1, "stick")?)?;
+            let name = arg(2, "backup name")?;
+            let list = backup_jobs::list_stick_backups(backend.as_ref(), &stick)?;
+            let found = list
+                .into_iter()
+                .find(|b| b.info.name == name)
+                .ok_or_else(|| format!("No backup '{name}' on {}.", stick.id))?;
+            let mut req = backup_jobs::ImportRequest {
+                stick,
+                dir_rel: found.dir_rel,
+                name: name.clone(),
+                roles: roles_arg(&args[3..])?,
+                mode: if args.iter().any(|a| a == "--merge") {
+                    ImportMode::Merge
+                } else {
+                    ImportMode::Replace
+                },
+            };
+            if cmd == "verify" {
+                return run_cli_job(app, "Backup verification", move |ctx| {
+                    backup_jobs::run_verify(backend.as_ref(), &req, ctx)
+                })
+                .map(|m| m + "\n");
+            }
+            if args[3..].iter().all(|a| a.starts_with("--")) {
+                // default: every partition in the backup
+                if let Ok(m) = &found.info.metadata {
+                    req.roles = m.roles();
+                }
+            }
+            let out = run_cli_job(app, "Backup import", move |ctx| {
+                backup_jobs::run_import(backend.as_ref(), &req, ctx)
+            })?;
+            let summary = backup_jobs::import_summary(&name, &out) + "\n";
+            if out.report.error_count > 0 {
+                // Partly restored: a failure for scripts.
+                return Err(summary);
+            }
+            Ok(summary)
+        }
+        Some("reset") => {
+            let full = match arg(1, "config|full")?.as_str() {
+                "config" => false,
+                "full" => true,
+                other => return Err(format!("Unknown reset kind '{other}'.")),
+            };
+            let confirmation = args
+                .iter()
+                .position(|a| a == "--confirm")
+                .and_then(|i| args.get(i + 1))
+                .cloned()
+                .unwrap_or_default();
+            let req = backup_jobs::ResetRequest {
+                full,
+                reset_rescue_settings: args.iter().any(|a| a == "--reset-rescue"),
+                confirmation,
+            };
+            let req2 = req.clone();
+            let rep = run_cli_job(app, "Factory reset", move |ctx| {
+                backup_jobs::run_reset(backend.as_ref(), &req, ctx)
+            })?;
+            let summary = backup_jobs::reset_summary(&req2, &rep) + "\n";
+            if !rep.errors.is_empty() {
+                return Err(summary);
+            }
+            Ok(summary)
+        }
+        _ => crate::cli_admin::backup_cmd(app, args).unwrap_or_else(|| {
+            Err("backup needs: sticks | list | export | verify | import | reset | repair | mkfs \
+                 | image."
+                .into())
+        }),
+    }
+}
+
+/// `--cli backup ...`; returns the process exit code.
+pub fn run_backup(app: &App, args: &[String]) -> i32 {
+    match backup_cmd(app, args) {
+        Ok(out) => {
+            print!("{out}");
+            0
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            1
+        }
+    }
+}
+
+/// Value after `--name`.
+fn opt_value(args: &[String], name: &str) -> Option<String> {
+    args.iter()
+        .position(|a| a == name)
+        .and_then(|i| args.get(i + 1))
+        .cloned()
+}
+
+fn has_flag(args: &[String], name: &str) -> bool {
+    args.iter().any(|a| a == name)
+}
+
+/// Options of the update source (`origin_arg`).
+const SOURCE_OPTIONS: &[&str] = &[
+    "--base",
+    "--proxy",
+    "--version",
+    "--machine",
+    "--suffix",
+    "--stick",
+    "--path",
+];
+
+/// Reject arguments that are neither one of `values` (followed by a value) nor one of `flags`,
+/// so a typo does not silently fall back to a default (e.g. the default OTA server).
+fn check_options(args: &[String], values: &[&str], flags: &[&str]) -> Result<(), String> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if values.contains(&a.as_str()) {
+            if it.next().is_none() {
+                return Err(format!("{a} needs a value."));
+            }
+        } else if !flags.contains(&a.as_str()) {
+            return Err(format!("Unknown argument '{a}'."));
+        }
+    }
+    Ok(())
+}
+
+/// The update source from `--stick/--path` or `--base/--version/--machine/--suffix`.
+fn origin_arg(app: &App, args: &[String]) -> Result<update_jobs::Origin, String> {
+    use std::str::FromStr;
+    if let Some(id) = opt_value(args, "--stick") {
+        let stick = find_stick(app, &id)?;
+        let path = opt_value(args, "--path").ok_or("--stick needs --path (see 'update scan').")?;
+        let rel = PathBuf::from(path.trim_start_matches('/'));
+        let is_image = rel.extension().is_some_and(|e| e == "squashfs");
+        return Ok(if is_image {
+            update_jobs::Origin::StickImage { stick, rel }
+        } else {
+            update_jobs::Origin::StickTree { stick, rel }
+        });
+    }
+    let dev = update_jobs::device_target(app.backend.as_ref());
+    let base = opt_value(args, "--base").unwrap_or_else(|| crate::settings::current().ota_base_url);
+    let version = opt_value(args, "--version").or(dev.target.as_ref().map(|t| t.version.clone()));
+    let machine = opt_value(args, "--machine").or(dev.machine.clone());
+    let suffix = match opt_value(args, "--suffix") {
+        Some(s) => Some(Suffix::from_str(&s).map_err(|e| e.to_string())?),
+        None => dev.target.as_ref().map(|t| t.suffix),
+    };
+    let (Some(version), Some(machine), Some(suffix)) = (version, machine, suffix) else {
+        return Err("No valid slot: give --version, --machine and --suffix (OTA-1).".into());
+    };
+    if let Some(t) = &dev.target {
+        if t.suffix != suffix {
+            eprintln!("warning: switching suffix from '{}' to '{suffix}'.", t.suffix);
+        }
+    }
+    let proxy = opt_value(args, "--proxy").or_else(|| crate::settings::current().proxy());
+    Ok(update_jobs::Origin::Network {
+        base_url: base,
+        target: Target::new(version, machine, suffix),
+        proxy,
+    })
+}
+
+/// SHA-256 of the running rescue image (for "matches current rescue", OTA-9). Computed here
+/// (the CLI has no background check) unless `--no-hash` is given.
+fn rescue_sha(app: &App, args: &[String]) -> Option<String> {
+    if has_flag(args, "--no-hash") {
+        return None;
+    }
+    if lock(&app.rescue_check).sha256().is_none() {
+        eprintln!("Computing the SHA-256 of the rescue partition (skip with --no-hash)...");
+        match app.start_rescue_check(None) {
+            Ok(h) => {
+                h.wait();
+            }
+            Err(e) => *lock(&app.rescue_check) = RescueCheck::Failed(e.to_string()),
+        }
+    }
+    let check = lock(&app.rescue_check).clone();
+    if let RescueCheck::Failed(e) = &check {
+        eprintln!("warning: rescue image SHA-256 not available: {e}");
+    }
+    check.sha256().map(str::to_string)
+}
+
+fn update_cmd(app: &App, args: &[String]) -> Result<String, String> {
+    let backend = Arc::clone(&app.backend);
+    match args.first().map(String::as_str) {
+        Some("scan") => {
+            let id = args.get(1).ok_or("update scan: missing stick.")?;
+            let stick = find_stick(app, id)?;
+            let items = update_jobs::scan_stick(backend.as_ref(), &stick)?;
+            if items.is_empty() {
+                return Ok(format!("No update found on {id}.\n"));
+            }
+            Ok(items.iter().map(|i| i.label() + "\n").collect())
+        }
+        Some("check") => {
+            check_options(&args[1..], SOURCE_OPTIONS, &["--no-hash"])?;
+            let origin = origin_arg(app, &args[1..])?;
+            let sha = rescue_sha(app, args);
+            let c = run_cli_job(app, "Update check", move |ctx| {
+                update_jobs::check(backend.as_ref(), &origin, sha.as_deref(), ctx)
+            })?;
+            Ok(c.text())
+        }
+        Some("start") => {
+            let values = [SOURCE_OPTIONS, &["--slot", "--image", "--confirm"]].concat();
+            check_options(
+                &args[1..],
+                &values,
+                &["--no-hash", "--allow-downgrade", "--allow-unverified", "--no-resume"],
+            )?;
+            let targets: update_jobs::Targets = opt_value(args, "--slot")
+                .ok_or("update start: missing --slot A|B|AB.")?
+                .parse()?;
+            if targets == update_jobs::Targets::Both
+                && opt_value(args, "--confirm").as_deref() != Some(WRITE_BOTH_CONFIRM_WORD)
+            {
+                return Err(format!(
+                    "Writing both slots needs --confirm {WRITE_BOTH_CONFIRM_WORD} (UI-4)."
+                ));
+            }
+            let origin = origin_arg(app, &args[1..])?;
+            let sha = rescue_sha(app, args);
+            let b2 = Arc::clone(&backend);
+            let o2 = origin.clone();
+            let c = run_cli_job(app, "Update check", move |ctx| {
+                update_jobs::check(b2.as_ref(), &o2, sha.as_deref(), ctx)
+            })?;
+            eprint!("{}", c.text());
+            let row = match opt_value(args, "--image") {
+                Some(ts) => c
+                    .rootfs
+                    .iter()
+                    .find(|r| r.image.build_timestamp.as_str() == ts)
+                    .ok_or_else(|| format!("No rootfs image with timestamp {ts}."))?,
+                None => c.rootfs.first().ok_or("The manifest has no rootfs image.")?,
+            };
+            if row.is_downgrade(targets) && !has_flag(args, "--allow-downgrade") {
+                return Err(
+                    "This is the same or an older build (downgrade): add --allow-downgrade.".into(),
+                );
+            }
+            if c.unverified && !has_flag(args, "--allow-unverified") {
+                return Err(
+                    "The image has no .sha256 sidecar (unverified): add --allow-unverified.".into(),
+                );
+            }
+            let mut options = xoros_core::flash::FlashOptions::default();
+            options.resume = !has_flag(args, "--no-resume");
+            let req = update_jobs::UpdateRequest {
+                origin,
+                image: row.image.clone(),
+                targets,
+                options,
+            };
+            let b3 = Arc::clone(&backend);
+            match run_cli_job(app, "Slot update", move |ctx| {
+                update_jobs::run_update(b3.as_ref(), &req, ctx)
+            }) {
+                Ok(o) => Ok(update_jobs::update_summary(&o)),
+                Err(e) => {
+                    let note = update_jobs::disabled_note(backend.as_ref(), &targets.slots());
+                    Err(format!("{e}\n{note}").trim().to_string())
+                }
+            }
+        }
+        _ => Err("update needs: check | scan | start.".into()),
+    }
+}
+
+fn net_cmd(app: &App, args: &[String]) -> Result<String, String> {
+    let env = net::NetEnv::for_backend(app.backend.as_ref());
+    match args.first().map(String::as_str) {
+        Some("up" | "dns") => check_options(&args[1..], &[], &[])?,
+        Some("test") => check_options(&args[1..], &["--base", "--proxy"], &[])?,
+        _ => {}
+    }
+    match args.first().map(String::as_str) {
+        Some("up") => {
+            let rep = net::config::bring_up_ethernet(&env).map_err(|e| e.to_string())?;
+            let mut t = rep.text();
+            for f in &rep.files {
+                t.push_str(&format!("wrote {}\n", f.display()));
+            }
+            if rep.interfaces.is_empty() || !rep.notes.is_empty() {
+                return Err(t);
+            }
+            Ok(t)
+        }
+        Some("dns") => {
+            let v = net::config::refresh_resolv_conf(&env).map_err(|e| e.to_string())?;
+            Ok(format!(
+                "{}: {}\n",
+                env.resolv_conf().display(),
+                v.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(" ")
+            ))
+        }
+        Some("test") => {
+            let dev = update_jobs::device_target(app.backend.as_ref());
+            let base = opt_value(args, "--base").unwrap_or_else(|| crate::settings::current().ota_base_url);
+            let url = match &dev.target {
+                Some(t) => xoros_core::source::ota_url(&base, t, "manifest.json"),
+                None => base.clone(),
+            };
+            let opts = net::diag::TestOptions {
+                url,
+                proxy: opt_value(args, "--proxy").or_else(|| crate::settings::current().proxy()),
+            };
+            let steps = net::diag::run(&env, &opts, &crate::tasks::CancelToken::new(), &mut |s| {
+                eprintln!("{}", net::diag::step_line(s))
+            });
+            net::diag::record(&env, &steps);
+            let failed = steps
+                .iter()
+                .any(|s| s.status == net::diag::StepStatus::Fail);
+            let text = net::diag::report_text(&steps);
+            if failed {
+                Err(text)
+            } else {
+                Ok(text)
+            }
+        }
+        Some("speed") => crate::cli_tests::net_speed(app, &args[1..]),
+        _ => crate::cli_net::net_cmd(app, args).unwrap_or_else(|| {
+            Err("net needs: up | dns | test | speed | show | scan | config | unconfig | list | \
+                 remember | forget | export-nm | nm-list | import-nm."
+                .into())
+        }),
+    }
+}
+
+fn time_cmd(app: &App, args: &[String]) -> Result<String, String> {
+    use net::time;
+    let env = net::NetEnv::for_backend(app.backend.as_ref());
+    match args.first().map(String::as_str) {
+        Some("show") | None => Ok(format!(
+            "{}{}\n",
+            time::format_utc(std::time::SystemTime::now()),
+            if time::clock_plausible() {
+                ""
+            } else {
+                "  (before the build date of this app: sync it)"
+            }
+        )),
+        Some("sync") => time::sync(&env, &args[1..]).map(|r| r.text() + "\n"),
+        Some("set") => {
+            let t = time::parse_manual(&args[1..].join(" "))?;
+            time::set_manual(&env, t).map(|m| m + "\n")
+        }
+        _ => crate::cli_admin::time_cmd(app, args)
+            .unwrap_or_else(|| Err("time needs: show | sync | set | rtc.".into())),
+    }
+}
+
+/// Like [`check_options`], for `--cli test` sub-commands; words without `--` are allowed
+/// only when the sub-command takes positional arguments.
+pub(crate) fn check_test_args(
+    args: &[String],
+    values: &[&str],
+    flags: &[&str],
+    positional: bool,
+) -> Result<(), String> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if values.contains(&a.as_str()) {
+            if it.next().is_none() {
+                return Err(format!("{a} needs a value."));
+            }
+        } else if !(flags.contains(&a.as_str()) || positional && !a.starts_with('-')) {
+            return Err(format!("Unknown argument '{a}'."));
+        }
+    }
+    Ok(())
+}
+
+/// `--cli test ...` (TST-*): parse into a request.
+fn test_request(app: &App, args: &[String]) -> Result<Option<hwtest::TestRequest>, String> {
+    use hwtest::{fsck::FsckRequest, memtest, slotcheck, TestRequest};
+    let num = |name: &str| -> Result<Option<u32>, String> {
+        opt_value(args, name)
+            .map(|v| v.parse::<u32>().map_err(|_| format!("{name}: not a number: '{v}'.")))
+            .transpose()
+    };
+    // Words that are neither options nor option values.
+    let positional = |values: &[&str]| -> Vec<String> {
+        let mut out = Vec::new();
+        let mut skip = false;
+        for a in &args[1..] {
+            if skip {
+                skip = false;
+            } else if a.starts_with("--") {
+                skip = values.contains(&a.as_str());
+            } else {
+                out.push(a.clone());
+            }
+        }
+        out
+    };
+    let rest = args.get(1..).unwrap_or(&[]);
+    match args.first().map(String::as_str) {
+        Some("results") => check_test_args(rest, &[], &["--json"], false)?,
+        Some("rescue") => check_test_args(rest, &[], &[], false)?,
+        Some("memory") => check_test_args(rest, &["--percent", "--passes"], &[], false)?,
+        Some("disk") => check_test_args(rest, &["--device"], &[], false)?,
+        Some("slots") => check_test_args(
+            rest,
+            &[SOURCE_OPTIONS, &["--manifest"]].concat(),
+            &["--no-files"],
+            true,
+        )?,
+        Some("fsck") => check_test_args(rest, &["--confirm"], &["--repair"], true)?,
+        Some(w) => {
+            if let Some(r) = crate::cli_tests::test_request(app, w, rest) {
+                return r.map(Some);
+            }
+        }
+        None => {}
+    }
+    Ok(Some(match args.first().map(String::as_str) {
+        Some("results") => return Ok(None),
+        Some("rescue") => TestRequest::Rescue,
+        Some("memory") => {
+            let percent = num("--percent")?.unwrap_or(u32::from(memtest::DEFAULT_PERCENT));
+            let passes = num("--passes")?.unwrap_or(1);
+            let (lo, hi) = memtest::PERCENT_RANGE.into_inner();
+            if !(u32::from(lo)..=u32::from(hi)).contains(&percent) {
+                return Err("--percent must be 1..95.".into());
+            }
+            if !memtest::PASSES_RANGE.contains(&passes) {
+                return Err("--passes must be 1..100.".into());
+            }
+            TestRequest::Memory(memtest::MemOptions {
+                percent: percent as u8,
+                passes,
+                max_bytes: None,
+            })
+        }
+        Some("disk") => TestRequest::Disk(match opt_value(args, "--device") {
+            Some(d) => hwtest::parse_disk_target(app.backend.as_ref(), &d)?,
+            None => None,
+        }),
+        Some("slots") => {
+            let mut slots = Vec::new();
+            for w in positional(&["--manifest", "--base", "--proxy", "--version", "--machine", "--suffix", "--stick", "--path"]) {
+                slots.push(w.parse::<Slot>().map_err(|e| e.to_string())?);
+            }
+            if slots.is_empty() {
+                slots = Slot::ALL.to_vec();
+            }
+            let manifest = match opt_value(args, "--manifest").as_deref() {
+                Some("none") => slotcheck::ManifestMode::Off,
+                Some("auto") | None
+                    if opt_value(args, "--base").is_none()
+                        && opt_value(args, "--stick").is_none() =>
+                {
+                    slotcheck::ManifestMode::Auto
+                }
+                Some("auto") | None => slotcheck::ManifestMode::Origin(origin_arg(app, args)?),
+                Some(other) => return Err(format!("--manifest: unknown value '{other}'.")),
+            };
+            TestRequest::Slots(slotcheck::SlotTestOptions {
+                slots,
+                read_files: !has_flag(args, "--no-files"),
+                manifest,
+            })
+        }
+        Some("fsck") => {
+            let mut roles = Vec::new();
+            for w in positional(&["--confirm"]) {
+                match PartRole::from_label(&w) {
+                    Some(r @ (PartRole::Overlay | PartRole::Application)) => roles.push(r),
+                    _ => return Err(format!("fsck: '{w}' is not overlay or application.")),
+                }
+            }
+            if roles.is_empty() {
+                roles = vec![PartRole::Overlay, PartRole::Application];
+            }
+            let repair = has_flag(args, "--repair");
+            let confirmation = opt_value(args, "--confirm").unwrap_or_default();
+            if repair && confirmation != crate::texts::FSCK_REPAIR_WORD {
+                return Err(format!(
+                    "A repair needs --confirm {} (UI-4).",
+                    crate::texts::FSCK_REPAIR_WORD
+                ));
+            }
+            TestRequest::Fsck(FsckRequest {
+                roles,
+                repair,
+                confirmation,
+            })
+        }
+        _ => {
+            return Err(
+                "test needs: slots | rescue | memory | memtest86 | disk | fsck | health | stick | stress | \
+                 results."
+                    .into(),
+            )
+        }
+    }))
+}
+
+/// `--cli test ...`; prints the result and returns the exit code of its outcome (0 pass or
+/// warning, 3 fail, 1 error/cancelled).
+pub fn run_test(app: &App, args: &[String]) -> i32 {
+    if let Some(code) = crate::cli_tests::run_test_command(app, args) {
+        return code;
+    }
+    let req = match test_request(app, args) {
+        Ok(Some(r)) => r,
+        Ok(None) => {
+            let store = &app.test_results;
+            if has_flag(args, "--json") {
+                return match serde_json::to_string_pretty(&store.all()) {
+                    Ok(s) => {
+                        println!("{s}");
+                        0
+                    }
+                    Err(e) => {
+                        eprintln!("error: {e}");
+                        1
+                    }
+                };
+            }
+            print!("{}", store.text());
+            return 0;
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 1;
+        }
+    };
+    let env = hwtest::TestEnv::of(app);
+    let (kind, title) = (req.task_kind(), req.kind().title());
+    match run_cli_task(app, title, kind, move |ctx| Ok(hwtest::run_request(&env, &req, ctx))) {
+        Ok(r) => {
+            print!("{}", r.text());
+            r.outcome.exit_code()
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            1
+        }
+    }
+}
+
+/// Print the result of a command; returns the process exit code.
+fn print_result(r: Result<String, String>) -> i32 {
+    match r {
+        Ok(out) => {
+            print!("{out}");
+            0
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            1
+        }
+    }
+}
+
+/// `--cli update ...`.
+pub fn run_update(app: &App, args: &[String]) -> i32 {
+    print_result(update_cmd(app, args))
+}
+
+/// `--cli net ...`.
+pub fn run_net(app: &App, args: &[String]) -> i32 {
+    print_result(net_cmd(app, args))
+}
+
+/// `--cli time ...`.
+pub fn run_time(app: &App, args: &[String]) -> i32 {
+    print_result(time_cmd(app, args))
+}
+
+/// `--cli report ...`, `--cli diag ...`, `--cli ssh ...`.
+pub fn run_report(app: &App, args: &[String]) -> i32 {
+    print_result(crate::cli_net::report_cmd(app, args))
+}
+
+pub fn run_diag(app: &App, args: &[String]) -> i32 {
+    print_result(crate::cli_net::diag_cmd(app, args))
+}
+
+pub fn run_ssh(app: &App, args: &[String]) -> i32 {
+    print_result(crate::cli_net::ssh_cmd(app, args))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn check_options_rejects_unknown_and_missing_values() {
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let flags = ["--no-hash"];
+        assert!(check_options(&a(&["--base", "http://x", "--no-hash"]), SOURCE_OPTIONS, &flags).is_ok());
+        assert!(check_options(&a(&["http://x"]), SOURCE_OPTIONS, &flags).is_err());
+        assert!(check_options(&a(&["--base"]), SOURCE_OPTIONS, &flags).is_err());
+        assert!(check_options(&a(&["--bsae", "http://x"]), SOURCE_OPTIONS, &flags).is_err());
+    }
+
+    #[test]
+    fn parse() {
+        let o = parse_args(Vec::<String>::new()).expect("empty");
+        assert_eq!(o.command, Command::Tui);
+        let o = parse_args(["--sim", "d", "--cli", "status", "--json"]).expect("status");
+        assert_eq!(o.sim, Some(PathBuf::from("d")));
+        assert_eq!(
+            o.command,
+            Command::Status {
+                json: true,
+                hash: true
+            }
+        );
+        let o = parse_args(["--cli", "status", "--no-hash"]).expect("status");
+        assert_eq!(
+            o.command,
+            Command::Status {
+                json: false,
+                hash: false
+            }
+        );
+        let o = parse_args(["--sim=x"]).expect("sim=");
+        assert_eq!(o.sim, Some(PathBuf::from("x")));
+        assert_eq!(
+            parse_args(["--sim-init", "s"]).map(|o| o.command),
+            Ok(Command::SimInit("s".into()))
+        );
+        assert!(parse_args(["--sim"]).is_err());
+        assert!(parse_args(["--cli"]).is_err());
+        assert!(parse_args(["--cli", "bogus"]).is_err());
+        assert_eq!(
+            parse_args(["--cli", "boot", "next", "rootfs_b"]).map(|o| o.command),
+            Ok(Command::Boot(vec!["next".into(), "rootfs_b".into()]))
+        );
+        assert_eq!(
+            parse_args(["--cli", "update", "start", "--slot", "B"]).map(|o| o.command),
+            Ok(Command::Update(vec!["start".into(), "--slot".into(), "B".into()]))
+        );
+        assert_eq!(
+            parse_args(["--cli", "time", "sync"]).map(|o| o.command),
+            Ok(Command::Time(vec!["sync".into()]))
+        );
+        assert_eq!(
+            parse_args(["--cli", "net", "test"]).map(|o| o.command),
+            Ok(Command::Net(vec!["test".into()]))
+        );
+        assert_eq!(
+            parse_args(["--cli", "backup", "list", "usb1"]).map(|o| o.command),
+            Ok(Command::Backup(vec!["list".into(), "usb1".into()]))
+        );
+        assert!(parse_args(["--cli", "status", "--bogus"]).is_err());
+        assert!(parse_args(["--what"]).is_err());
+        assert_eq!(
+            parse_args(["--cli", "test", "memory", "--percent", "50"]).map(|o| o.command),
+            Ok(Command::Test(vec![
+                "memory".into(),
+                "--percent".into(),
+                "50".into()
+            ]))
+        );
+    }
+
+    #[test]
+    fn test_requests() {
+        use crate::hwtest::slotcheck::ManifestMode;
+        use crate::hwtest::TestRequest;
+        let d = crate::hw::testutil::TempDir::new("cli-test");
+        crate::backend::sim::SimBackend::create_example(d.path()).expect("example");
+        let app = App::new(
+            crate::app::make_backend(Some(d.path().to_path_buf())).expect("backend"),
+        );
+        let req = |words: &[&str]| {
+            let args: Vec<String> = words.iter().map(|w| w.to_string()).collect();
+            test_request(&app, &args)
+        };
+        assert_eq!(req(&["results"]), Ok(None));
+        assert_eq!(req(&["rescue"]), Ok(Some(TestRequest::Rescue)));
+        match req(&["memory", "--percent", "50", "--passes", "2"]) {
+            Ok(Some(TestRequest::Memory(o))) => assert_eq!((o.percent, o.passes), (50, 2)),
+            other => panic!("{other:?}"),
+        }
+        assert!(req(&["memory", "--percent", "96"]).is_err());
+        assert!(req(&["memory", "--passes", "x"]).is_err());
+        assert_eq!(req(&["disk"]), Ok(Some(TestRequest::Disk(None))));
+        assert_eq!(
+            req(&["disk", "--device", "application"]),
+            Ok(Some(TestRequest::Disk(Some(PartRole::Application))))
+        );
+        assert_eq!(
+            req(&["disk", "--device", "sda4"]),
+            Ok(Some(TestRequest::Disk(Some(PartRole::Rescue))))
+        );
+        assert_eq!(req(&["disk", "--device", "sda"]), Ok(Some(TestRequest::Disk(None))));
+        assert!(req(&["disk", "--device", "sdz"]).is_err());
+        match req(&["slots", "B", "--no-files", "--manifest", "none"]) {
+            Ok(Some(TestRequest::Slots(o))) => {
+                assert_eq!(o.slots, vec![Slot::B]);
+                assert!(!o.read_files);
+                assert_eq!(o.manifest, ManifestMode::Off);
+            }
+            other => panic!("{other:?}"),
+        }
+        match req(&["slots", "--stick", "usb1", "--path", "xoros/ota/1.0/qemux86-64/devel"]) {
+            Ok(Some(TestRequest::Slots(o))) => {
+                assert_eq!(o.slots, Slot::ALL.to_vec());
+                assert!(matches!(o.manifest, ManifestMode::Origin(_)));
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(req(&["slots", "C"]).is_err());
+        match req(&["fsck", "overlay"]) {
+            Ok(Some(TestRequest::Fsck(r))) => {
+                assert_eq!(r.roles, vec![PartRole::Overlay]);
+                assert!(!r.repair);
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(req(&["fsck", "--repair"]).is_err());
+        assert!(req(&["fsck", "rescue"]).is_err());
+        match req(&["fsck", "--repair", "--confirm", "REPAIR"]) {
+            Ok(Some(TestRequest::Fsck(r))) => {
+                assert_eq!(r.roles.len(), 2);
+                assert!(r.repair);
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(req(&["bogus"]).is_err());
+        // Unknown arguments are rejected (a typo must not run a different test).
+        assert!(req(&["rescue", "--fast"]).is_err());
+        assert!(req(&["memory", "--percnt", "50"]).is_err());
+        assert!(req(&["memory", "--percent"]).is_err());
+        assert!(req(&["disk", "sda"]).is_err());
+        assert!(req(&["slots", "A", "--no-file"]).is_err());
+        assert!(req(&["fsck", "overlay", "--repiar"]).is_err());
+        assert_eq!(req(&["results", "--json"]), Ok(None));
+        assert!(req(&["results", "--jsn"]).is_err());
+    }
+}
