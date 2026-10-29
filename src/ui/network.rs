@@ -326,7 +326,7 @@ fn config_form(
             ""
         };
         list.add_child(
-            &format!("Passphrase{hint}"),
+            format!("Passphrase{hint}"),
             EditView::new().secret().with_name(F_PASS).fixed_width(34),
         );
         list.add_child(

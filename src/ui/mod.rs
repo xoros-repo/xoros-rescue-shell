@@ -205,13 +205,8 @@ pub fn run(app: App) -> Result<(), String> {
     refresh_status(&mut siv);
     start_ticker(&siv);
 
-    let backend_init = || -> std::io::Result<Box<dyn cursive::backend::Backend>> {
-        let backend = cursive::backends::crossterm::Backend::init()?;
-        Ok(Box::new(cursive_buffered_backend::BufferedBackend::new(
-            backend,
-        )))
-    };
-    siv.try_run_with(backend_init).map_err(|e| e.to_string())?;
+    siv.try_run_with(cursive::backends::crossterm::Backend::init)
+        .map_err(|e| e.to_string())?;
     app.tasks.cancel_all();
     stop_ssh_if_started(&app);
     Ok(())
