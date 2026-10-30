@@ -1,4 +1,4 @@
-//! Terminal handling outside cursive: saved termios, panic hook (UI-5), subshell (SH-1).
+//! Terminal handling outside the UI: saved termios, panic hook (UI-5), subshell (SH-1).
 
 use std::io::Write;
 use std::path::Path;
@@ -11,11 +11,12 @@ use crate::constants::{SUBSHELL, SUBSHELL_PROMPT};
 static STARTUP_TERMIOS: OnceLock<libc::termios> = OnceLock::new();
 static MAIN_THREAD: OnceLock<ThreadId> = OnceLock::new();
 
-/// Escape sequences undoing what the crossterm backend sets up (alternate screen, hidden
-/// cursor, mouse capture).
+/// Escape sequences undoing what the UI sets up (alternate screen, hidden cursor, mouse
+/// capture as crossterm's `EnableMouseCapture` turns it on) and setting it up again. The UI
+/// repaints everything after a subshell.
 const LEAVE_TUI: &str =
-    "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1015l\x1b[?1006l\x1b[0m\x1b[?25h\x1b[?1049l";
-const ENTER_TUI: &str = "\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1002h\x1b[?1015h\x1b[?1006h";
+    "\x1b[?1006l\x1b[?1015l\x1b[?1003l\x1b[?1002l\x1b[?1000l\x1b[0m\x1b[?25h\x1b[?1049l";
+const ENTER_TUI: &str = "\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1015h\x1b[?1006h";
 
 fn get_termios() -> Option<libc::termios> {
     // SAFETY: termios is a plain C struct; tcgetattr fills it for a valid fd.

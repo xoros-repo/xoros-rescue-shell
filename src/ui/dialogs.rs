@@ -1,12 +1,12 @@
 //! Common dialogs: info, error (UI-5), confirm (UI-4), choice lists, text screens.
 //! All sized to fit 80x24 (RT-4); `q` and `Esc` close them (UI-2).
 
-use cursive::event::Key;
-use cursive::traits::*;
-use cursive::views::{
+use crate::ui::tk::Key;
+use crate::ui::tk::traits::*;
+use crate::ui::tk::views::{
     Dialog, EditView, LinearLayout, OnEventView, ScrollView, SelectView, TextView,
 };
-use cursive::Cursive;
+use crate::ui::tk::Ui;
 
 use crate::texts;
 
@@ -32,7 +32,7 @@ pub fn scroll_text(text: impl Into<String>) -> impl View {
         .max_height(MAX_H)
 }
 
-pub fn info(s: &mut Cursive, title: &str, text: &str) {
+pub fn info(s: &mut Ui, title: &str, text: &str) {
     s.add_layer(closable(
         Dialog::around(scroll_text(text))
             .title(title)
@@ -41,7 +41,7 @@ pub fn info(s: &mut Cursive, title: &str, text: &str) {
 }
 
 /// Error dialog with a short explanation and the underlying error text (UI-5).
-pub fn error(s: &mut Cursive, what: &str, err: &dyn std::fmt::Display) {
+pub fn error(s: &mut Ui, what: &str, err: &dyn std::fmt::Display) {
     log::error!("{what}: {err}");
     let text = format!("{what}\n\n{err}");
     s.add_layer(closable(
@@ -51,7 +51,7 @@ pub fn error(s: &mut Cursive, what: &str, err: &dyn std::fmt::Display) {
     ));
 }
 
-pub fn not_implemented(s: &mut Cursive, feature: &str) {
+pub fn not_implemented(s: &mut Ui, feature: &str) {
     info(
         s,
         texts::TITLE_NOT_IMPLEMENTED,
@@ -60,9 +60,9 @@ pub fn not_implemented(s: &mut Cursive, feature: &str) {
 }
 
 /// Confirmation dialog; `on_yes` runs after the dialog is closed.
-pub fn confirm<F>(s: &mut Cursive, title: &str, text: &str, yes_label: &str, on_yes: F)
+pub fn confirm<F>(s: &mut Ui, title: &str, text: &str, yes_label: &str, on_yes: F)
 where
-    F: Fn(&mut Cursive) + 'static + Send + Sync,
+    F: Fn(&mut Ui) + 'static + Send + Sync,
 {
     s.add_layer(closable(
         Dialog::around(scroll_text(text))
@@ -76,10 +76,10 @@ where
 }
 
 /// Let the user pick one of `items`; `on_pick` runs after the dialog is closed.
-pub fn choose<T, F>(s: &mut Cursive, title: &str, text: &str, items: Vec<(String, T)>, on_pick: F)
+pub fn choose<T, F>(s: &mut Ui, title: &str, text: &str, items: Vec<(String, T)>, on_pick: F)
 where
     T: Send + Sync + 'static,
-    F: Fn(&mut Cursive, &T) + 'static + Send + Sync,
+    F: Fn(&mut Ui, &T) + 'static + Send + Sync,
 {
     let mut select = SelectView::<T>::new();
     for (label, value) in items {
@@ -116,12 +116,12 @@ const TYPED_INPUT: &str = "typed_confirm_input";
 
 /// Confirmation by typing `word` (UI-4, RST-3). `on_ok` runs after the dialog is closed and gets
 /// the typed text; a wrong word shows a hint and keeps the dialog open.
-pub fn confirm_typed<F>(s: &mut Cursive, title: &str, text: &str, word: &'static str, on_ok: F)
+pub fn confirm_typed<F>(s: &mut Ui, title: &str, text: &str, word: &'static str, on_ok: F)
 where
-    F: Fn(&mut Cursive, String) + 'static + Send + Sync,
+    F: Fn(&mut Ui, String) + 'static + Send + Sync,
 {
     let on_ok = std::sync::Arc::new(on_ok);
-    let submit = move |s: &mut Cursive| {
+    let submit = move |s: &mut Ui| {
         let typed = s
             .call_on_name(TYPED_INPUT, |v: &mut EditView| v.get_content().to_string())
             .unwrap_or_default();
@@ -161,8 +161,8 @@ where
 }
 
 /// Remove the layer that contains the view named `name`, if it is still open.
-pub fn remove_named_layer(s: &mut Cursive, name: &str) {
-    if let Some(pos) = s.screen_mut().find_layer_from_name(name) {
-        s.screen_mut().remove_layer(pos);
+pub fn remove_named_layer(s: &mut Ui, name: &str) {
+    if let Some(pos) = s.find_layer_from_name(name) {
+        s.remove_layer(pos);
     }
 }

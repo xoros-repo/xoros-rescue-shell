@@ -564,7 +564,7 @@ include it in the diagnostics bundle (`LOG-2`).
   trusted_keys = []            # hex SEC1 secp256k1 public keys
   http_proxy = ""
   ntp_servers = ["pool.ntp.org", "time.cloudflare.com"]
-  theme = "default"
+  theme = "default"            # default, dark, mono, norton
   ```
 
   The app MUST work when the overlay partition is missing or broken (settings are then read-only defaults).
@@ -573,7 +573,9 @@ include it in the diagnostics bundle (`LOG-2`).
 
 ## 7. User interface requirements
 
-- **UI-1 (P1)** Toolkit: Rust + `cursive` (crossterm backend), as in the current code base.
+- **UI-1 (P1)** Toolkit: Rust + `ratatui` (crossterm backend). Dialogs, forms, lists and the menu bar come from a
+  small widget layer in `ui/tk/` on top of ratatui. Use the same `crossterm` version as ratatui's backend (the
+  subshell, `SH-1`, takes over keys that its event reader already read).
 - **UI-2 (P1)** Keyboard: `Esc` menu, arrows/Tab to move, Enter to select, `q`/`Esc` to close a dialog. Shortcuts
   shown in the status bar. `Ctrl-C` MUST NOT exit the app silently (it is restarted by systemd anyway); show
   "Use Power -> ... or Tools -> Subshell".
@@ -658,10 +660,10 @@ src/
   tests/             memtest, disk read, fsck, smart (TST-*)
   report.rs          system report / diagnostics bundle (SYS-5, LOG-2)
   tasks.rs           background job runner with progress + cancel (UI-3)
-  ui/                cursive screens and dialogs, one module per menu
+  ui/                screens and dialogs, one module per menu; ui/tk/ widget layer on ratatui
 ```
 
-- **ARCH-1 (P1)** Business logic (everything outside `ui/`) MUST NOT depend on `cursive`, so it can be unit tested and
+- **ARCH-1 (P1)** Business logic (everything outside `ui/`) MUST NOT depend on `ratatui`, so it can be unit tested and
   driven by a CLI.
 - **ARCH-2 (P2)** Non-interactive CLI for automation and serial-console use, e.g.
   `xoros-rescue-shell --cli status --json`, `... --cli boot reset-counter a`, `... --cli boot next rootfs_b`,

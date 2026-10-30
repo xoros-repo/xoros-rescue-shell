@@ -1,9 +1,9 @@
 //! Boot menu: counters, next boot, order, MAX_TRIES, rotation, grubenv (BOOT-1..7, ROT-1).
 
-use cursive::menu::Tree;
-use cursive::traits::*;
-use cursive::views::{Dialog, LinearLayout, ScrollView, SelectView, TextView};
-use cursive::Cursive;
+use crate::ui::tk::menu::Tree;
+use crate::ui::tk::traits::*;
+use crate::ui::tk::views::{Dialog, LinearLayout, ScrollView, SelectView, TextView};
+use crate::ui::tk::Ui;
 
 use crate::backend::{BootTarget, ErrorKind, Result as BResult, Slot, SystemBackend};
 use crate::boot as ctl;
@@ -15,7 +15,7 @@ use crate::ui::{app, refresh_status, show_screen};
 
 const BOOT_SUMMARY: &str = "boot_summary";
 
-type Action = fn(&mut Cursive);
+type Action = fn(&mut Ui);
 
 const ACTIONS: &[(&str, Action)] = &[
     ("Reset try counter...", reset_counter),
@@ -77,7 +77,7 @@ fn summary_text(b: &dyn SystemBackend) -> String {
 }
 
 /// The Boot control screen (BOOT-1).
-pub fn show_boot(s: &mut Cursive) {
+pub fn show_boot(s: &mut Ui) {
     let Some(app) = app(s) else { return };
     let summary = summary_text(app.backend.as_ref());
     let mut select = SelectView::<Action>::new();
@@ -103,7 +103,7 @@ pub fn show_boot(s: &mut Cursive) {
     );
 }
 
-fn refresh_boot(s: &mut Cursive) {
+fn refresh_boot(s: &mut Ui) {
     if let Some(app) = app(s) {
         let text = summary_text(app.backend.as_ref());
         s.call_on_name(BOOT_SUMMARY, |v: &mut TextView| v.set_content(text));
@@ -113,7 +113,7 @@ fn refresh_boot(s: &mut Cursive) {
 
 /// Run a boot-control action and report the result (UI-5). Offers to recreate grubenv
 /// when it is broken (ENV-2).
-fn apply<F>(s: &mut Cursive, what: &str, f: F)
+fn apply<F>(s: &mut Ui, what: &str, f: F)
 where
     F: FnOnce(&dyn SystemBackend) -> BResult<String>,
 {
@@ -138,7 +138,7 @@ fn slot_items() -> Vec<(String, Slot)> {
         .collect()
 }
 
-fn reset_counter(s: &mut Cursive) {
+fn reset_counter(s: &mut Ui) {
     let mut items: Vec<(String, Vec<Slot>)> = Slot::ALL
         .iter()
         .map(|s| (format!("Slot {}", s.letter()), vec![*s]))
@@ -164,9 +164,9 @@ fn reset_counter(s: &mut Cursive) {
 }
 
 /// Confirm booting into a slot that may be invalid (BOOT-6), then continue.
-fn with_slot_warning<F>(s: &mut Cursive, slot: Slot, then: F)
+fn with_slot_warning<F>(s: &mut Ui, slot: Slot, then: F)
 where
-    F: Fn(&mut Cursive) + Send + Sync + 'static,
+    F: Fn(&mut Ui) + Send + Sync + 'static,
 {
     let Some(app) = app(s) else { return };
     match ctl::slot_boot_warning(app.backend.as_ref(), slot) {
@@ -181,7 +181,7 @@ where
     }
 }
 
-fn next_boot(s: &mut Cursive) {
+fn next_boot(s: &mut Ui) {
     let items = vec![
         ("Slot A (once)".to_string(), Some(BootTarget::Slot(Slot::A))),
         ("Slot B (once)".to_string(), Some(BootTarget::Slot(Slot::B))),
@@ -195,7 +195,7 @@ fn next_boot(s: &mut Cursive) {
         items,
         |s, target| {
             let target = *target;
-            let set = move |s: &mut Cursive| {
+            let set = move |s: &mut Ui| {
                 apply(s, "Set next boot", move |b| {
                     ctl::set_next_boot(b, target)?;
                     Ok(match target {
@@ -215,7 +215,7 @@ fn next_boot(s: &mut Cursive) {
     );
 }
 
-fn reboot_into_slot(s: &mut Cursive) {
+fn reboot_into_slot(s: &mut Ui) {
     choose(
         s,
         "Reboot into slot",
@@ -245,7 +245,7 @@ fn reboot_into_slot(s: &mut Cursive) {
     );
 }
 
-fn slot_order(s: &mut Cursive) {
+fn slot_order(s: &mut Ui) {
     let items = vec![
         ("A first (ROOTFS_A ROOTFS_B)".to_string(), Slot::A),
         ("B first (ROOTFS_B ROOTFS_A)".to_string(), Slot::B),
@@ -265,7 +265,7 @@ fn slot_order(s: &mut Cursive) {
     );
 }
 
-fn max_tries(s: &mut Cursive) {
+fn max_tries(s: &mut Ui) {
     let items = MAX_TRIES_RANGE.map(|n| (n.to_string(), n)).collect();
     choose(
         s,
@@ -282,7 +282,7 @@ fn max_tries(s: &mut Cursive) {
     );
 }
 
-fn disable_slot(s: &mut Cursive) {
+fn disable_slot(s: &mut Ui) {
     choose(
         s,
         "Disable slot",
@@ -306,7 +306,7 @@ fn disable_slot(s: &mut Cursive) {
     );
 }
 
-fn rotation(s: &mut Cursive) {
+fn rotation(s: &mut Ui) {
     let items = (0u8..=3)
         .map(|r| (format!("{r}: {} degrees", u32::from(r) * 90), r))
         .collect();
@@ -324,7 +324,7 @@ fn rotation(s: &mut Cursive) {
     );
 }
 
-fn raw_view(s: &mut Cursive) {
+fn raw_view(s: &mut Ui) {
     let Some(app) = app(s) else { return };
     match app.backend.boot_state() {
         Ok(st) => s.add_layer(text_screen(
@@ -336,7 +336,7 @@ fn raw_view(s: &mut Cursive) {
     }
 }
 
-fn recreate_grubenv(s: &mut Cursive) {
+fn recreate_grubenv(s: &mut Ui) {
     let Some(app) = app(s) else { return };
     match app.backend.boot_state() {
         Err(e) if e.kind == ErrorKind::GrubenvBroken => offer_recreate(s),
@@ -345,7 +345,7 @@ fn recreate_grubenv(s: &mut Cursive) {
     }
 }
 
-fn offer_recreate(s: &mut Cursive) {
+fn offer_recreate(s: &mut Ui) {
     confirm(
         s,
         "Recreate grubenv",

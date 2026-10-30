@@ -1,8 +1,8 @@
 //! Power menu (PWR-1, PWR-2).
 
-use cursive::menu::Tree;
-use cursive::views::Dialog;
-use cursive::Cursive;
+use crate::ui::tk::menu::Tree;
+use crate::ui::tk::views::Dialog;
+use crate::ui::tk::Ui;
 
 use crate::backend::{BootTarget, Slot};
 use crate::power::{execute, PowerError, PowerOutcome, PowerPlan};
@@ -34,7 +34,7 @@ pub fn menu() -> Tree {
         })
 }
 
-fn ask(s: &mut Cursive, plan: PowerPlan) {
+fn ask(s: &mut Ui, plan: PowerPlan) {
     let text = format!("{}?", capitalize(&plan.describe()));
     dialogs::confirm(s, texts::TITLE_CONFIRM, &text, texts::BTN_YES, move |s| {
         run_plan(s, plan)
@@ -50,7 +50,7 @@ fn capitalize(t: &str) -> String {
 }
 
 /// Reboot into a slot: warn if invalid (BOOT-6), offer resetting its counter (PWR-1).
-fn ask_slot(s: &mut Cursive, slot: Slot) {
+fn ask_slot(s: &mut Ui, slot: Slot) {
     let Some(app) = app(s) else { return };
     let warning = crate::boot::slot_boot_warning(app.backend.as_ref(), slot)
         .map(|w| format!("WARNING: {w}\n\n"))
@@ -79,7 +79,7 @@ fn ask_slot(s: &mut Cursive, slot: Slot) {
 }
 
 /// Execute a power plan and show the outcome.
-pub fn run_plan(s: &mut Cursive, plan: PowerPlan) {
+pub fn run_plan(s: &mut Ui, plan: PowerPlan) {
     let Some(app) = app(s) else { return };
     match execute(plan, app.backend.as_ref(), &app.tasks) {
         Ok(PowerOutcome::Simulated(msg)) => {

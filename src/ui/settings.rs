@@ -1,8 +1,8 @@
 //! Settings screen (CFG-1) with the PIN (CFG-2). Tools -> Settings.
 
-use cursive::traits::*;
-use cursive::views::{Checkbox, Dialog, EditView, LinearLayout, SelectView, TextView};
-use cursive::Cursive;
+use crate::ui::tk::traits::*;
+use crate::ui::tk::views::{Checkbox, Dialog, EditView, LinearLayout, SelectView, TextView};
+use crate::ui::tk::Ui;
 
 use crate::settings::{self, Origin, Settings, THEMES};
 use crate::texts;
@@ -29,20 +29,23 @@ fn field(label: &str, name: &str, value: &str) -> LinearLayout {
         )
 }
 
-fn text_of(s: &mut Cursive, name: &str) -> String {
+fn text_of(s: &mut Ui, name: &str) -> String {
     s.call_on_name(name, |v: &mut EditView| v.get_content().trim().to_string())
         .unwrap_or_default()
 }
 
 /// Tools -> Settings (behind the PIN).
-pub fn show(s: &mut Cursive) {
+pub fn show(s: &mut Ui) {
     crate::ui::pin::require(s, "settings", open);
 }
 
-fn open(s: &mut Cursive) {
+fn open(s: &mut Ui) {
     let st = settings::state();
     let c = &st.settings;
-    let mut theme = SelectView::<String>::new().popup();
+    // The chosen theme shows at once; it is kept by Save and dropped when the screen closes.
+    let mut theme = SelectView::<String>::new()
+        .popup()
+        .on_select(|s, t: &String| s.preview_theme(crate::ui::theme::named(t)));
     for t in THEMES {
         theme.add_item(*t, t.to_string());
     }
@@ -116,7 +119,7 @@ fn open(s: &mut Cursive) {
     );
 }
 
-fn save_clicked(s: &mut Cursive) {
+fn save_clicked(s: &mut Ui) {
     let mut next = settings::current();
     let mut errors = Vec::new();
     for (key, name) in [
@@ -157,7 +160,7 @@ fn save_clicked(s: &mut Cursive) {
 }
 
 /// Save to the overlay partition, apply the theme, close the screen.
-fn store(s: &mut Cursive, next: Settings, done: &str) {
+fn store(s: &mut Ui, next: Settings, done: &str) {
     let Some(app) = app(s) else { return };
     match settings::save(app.backend.as_ref(), &next) {
         Ok(()) => {
@@ -169,7 +172,7 @@ fn store(s: &mut Cursive, next: Settings, done: &str) {
     }
 }
 
-fn pin_menu(s: &mut Cursive) {
+fn pin_menu(s: &mut Ui) {
     let enabled = settings::current().pin_enabled();
     let layout = LinearLayout::vertical()
         .child(TextView::new(texts::PIN_INFO).max_width(60))

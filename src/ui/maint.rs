@@ -1,7 +1,7 @@
 //! Backup menu additions: repair / re-create a persistent file system (BAK-6), raw partition
 //! image (BAK-7), and safe removal of a stick (USB-5, also in the Update menu).
 
-use cursive::Cursive;
+use crate::ui::tk::Ui;
 
 use crate::backend::PartRole;
 use crate::partition_jobs::{self, RepairOutcome, IMAGE_ROLES, MKFS_CONFIRM_WORD};
@@ -14,7 +14,7 @@ use crate::ui::pop_to_base;
 const JOB_DIALOG: &str = "maint_job_progress";
 
 /// BAK-6: choose overlay/application, then e2fsck -y + mount test (behind the PIN).
-pub fn repair_start(s: &mut Cursive) {
+pub fn repair_start(s: &mut Ui) {
     pop_to_base(s);
     crate::ui::pin::require(s, "repair file system", |s| {
         let items = [PartRole::Overlay, PartRole::Application]
@@ -31,7 +31,7 @@ pub fn repair_start(s: &mut Cursive) {
     });
 }
 
-fn run_repair(s: &mut Cursive, role: PartRole) {
+fn run_repair(s: &mut Ui, role: PartRole) {
     jobs::run(
         s,
         "File system repair",
@@ -49,7 +49,7 @@ fn run_repair(s: &mut Cursive, role: PartRole) {
     );
 }
 
-fn offer_mkfs(s: &mut Cursive, r: RepairOutcome) {
+fn offer_mkfs(s: &mut Ui, r: RepairOutcome) {
     let role = r.role;
     let text = format!(
         "{}\nThis ERASES all data on {} ({}).",
@@ -78,7 +78,7 @@ fn offer_mkfs(s: &mut Cursive, r: RepairOutcome) {
 }
 
 /// BAK-7: choose the partition and the stick.
-pub fn image_start(s: &mut Cursive) {
+pub fn image_start(s: &mut Ui) {
     pop_to_base(s);
     let items = IMAGE_ROLES
         .iter()
@@ -109,7 +109,7 @@ pub fn image_start(s: &mut Cursive) {
 }
 
 /// USB-5: unmount + sync, then tell the user the stick can be removed.
-pub fn safe_remove_start(s: &mut Cursive) {
+pub fn safe_remove_start(s: &mut Ui) {
     pop_to_base(s);
     crate::ui::backup::choose_stick(s, "Safely remove stick", |s, stick| {
         let Some(app) = crate::ui::app(s) else { return };

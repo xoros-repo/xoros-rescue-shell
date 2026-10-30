@@ -1,9 +1,8 @@
 //! Progress dialog for background tasks: bar, bytes, speed, ETA and Cancel (UI-3).
 
-use cursive::theme::ColorStyle;
-use cursive::traits::*;
-use cursive::views::Dialog;
-use cursive::{Cursive, Printer, Vec2};
+use crate::ui::tk::traits::*;
+use crate::ui::tk::views::Dialog;
+use crate::ui::tk::{Printer, Ui, Vec2};
 
 use crate::tasks::{format_bytes, format_duration, TaskHandle, TaskSnapshot, TaskState};
 use crate::texts;
@@ -64,7 +63,7 @@ impl View for TaskView {
             (None, _) => 0,
         };
         printer.print((0, 1), "[");
-        printer.with_color(ColorStyle::highlight(), |p| {
+        printer.with_style(printer.theme.highlight(), |p| {
             p.print_hline((1, 1), filled, " ");
         });
         printer.print_hline((1 + filled, 1), bar_w - filled, ".");
@@ -84,13 +83,13 @@ impl View for TaskView {
 
 /// Show a progress dialog for `handle`. "Close" hides the dialog; the task keeps running
 /// and is listed in Tools -> Background tasks.
-pub fn show_task(s: &mut Cursive, title: &str, handle: TaskHandle) {
+pub fn show_task(s: &mut Ui, title: &str, handle: TaskHandle) {
     s.add_layer(task_dialog(title, handle));
 }
 
 /// Like [`show_task`], with a name so the dialog can be closed when the task finishes
 /// ([`crate::ui::dialogs::remove_named_layer`]).
-pub fn show_task_named(s: &mut Cursive, title: &str, handle: TaskHandle, name: &str) {
+pub fn show_task_named(s: &mut Ui, title: &str, handle: TaskHandle, name: &str) {
     s.add_layer(task_dialog(title, handle).with_name(name));
 }
 

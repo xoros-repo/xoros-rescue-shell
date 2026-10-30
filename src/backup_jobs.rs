@@ -1,5 +1,5 @@
 //! Backup, restore and factory reset jobs on top of [`crate::backup`] and the backend
-//! (BAK-1..5, RST-1..3). No cursive (ARCH-1): the UI and the CLI call these functions inside a
+//! (BAK-1..5, RST-1..3). No ratatui (ARCH-1): the UI and the CLI call these functions inside a
 //! [`TaskRunner`](crate::tasks::TaskRunner) worker.
 //!
 //! The backup module uses `Rc` internally, so every job function here runs one backup call

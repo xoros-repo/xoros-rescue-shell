@@ -4,10 +4,10 @@
 //! The screens only collect choices; the tests run in [`crate::hwtest`] inside background
 //! tasks with progress and Cancel (UI-3). Every result is shown in a dialog and logged.
 
-use cursive::menu::Tree;
-use cursive::traits::*;
-use cursive::views::{Checkbox, Dialog, EditView, LinearLayout, TextView};
-use cursive::Cursive;
+use crate::ui::tk::menu::Tree;
+use crate::ui::tk::traits::*;
+use crate::ui::tk::views::{Checkbox, Dialog, EditView, LinearLayout, TextView};
+use crate::ui::tk::Ui;
 
 use crate::backend::{PartRole, Slot};
 use crate::hwtest::fsck::{needs_repair, FsckRequest};
@@ -46,7 +46,7 @@ pub fn menu() -> Tree {
 }
 
 /// Run a test in the background (progress dialog with Cancel), then show its result.
-pub fn run_test(s: &mut Cursive, req: TestRequest) {
+pub fn run_test(s: &mut Ui, req: TestRequest) {
     let kind = req.kind();
     jobs::run(
         s,
@@ -63,7 +63,7 @@ pub fn run_test(s: &mut Cursive, req: TestRequest) {
 }
 
 /// The result dialog; a file system check with errors offers the repair (TST-6).
-fn show_result(s: &mut Cursive, r: TestResult) {
+fn show_result(s: &mut Ui, r: TestResult) {
     let title = format!("{}: {}", r.kind.title(), r.outcome);
     let mut d = Dialog::around(dialogs::scroll_text(r.text())).title(title);
     let repair = needs_repair(&r.details);
@@ -76,7 +76,7 @@ fn show_result(s: &mut Cursive, r: TestResult) {
     s.add_layer(closable(d.dismiss_button(texts::BTN_CLOSE)));
 }
 
-fn show_results(s: &mut Cursive) {
+fn show_results(s: &mut Ui) {
     let Some(app) = app(s) else { return };
     pop_to_base(s);
     let text = app.test_results.text();
@@ -91,14 +91,14 @@ fn checkbox(name: &str, label: &str, checked: bool) -> LinearLayout {
         .child(TextView::new(format!(" {label}")))
 }
 
-fn is_checked(s: &mut Cursive, name: &str) -> bool {
+fn is_checked(s: &mut Ui, name: &str) -> bool {
     s.call_on_name(name, |c: &mut Checkbox| c.is_checked())
         .unwrap_or(false)
 }
 
 // --- TST-4 ---
 
-fn slot_start(s: &mut Cursive) {
+fn slot_start(s: &mut Ui) {
     pop_to_base(s);
     let items = vec![
         ("Both slots".to_string(), Slot::ALL.to_vec()),
@@ -114,7 +114,7 @@ fn slot_start(s: &mut Cursive) {
     );
 }
 
-fn slot_options(s: &mut Cursive, slots: Vec<Slot>) {
+fn slot_options(s: &mut Ui, slots: Vec<Slot>) {
     let layout = LinearLayout::vertical()
         .child(checkbox(
             READ_FILES_BOX,
@@ -159,12 +159,12 @@ fn number_field(label: &str, name: &str, value: u32) -> LinearLayout {
         )
 }
 
-fn read_number(s: &mut Cursive, name: &str) -> Option<u32> {
+fn read_number(s: &mut Ui, name: &str) -> Option<u32> {
     s.call_on_name(name, |v: &mut EditView| v.get_content().trim().parse().ok())
         .flatten()
 }
 
-fn memory_start(s: &mut Cursive) {
+fn memory_start(s: &mut Ui) {
     let Some(app) = app(s) else { return };
     pop_to_base(s);
     let mem = match memtest::mem_info(&app.backend.host_paths().proc_root) {
@@ -205,7 +205,7 @@ fn memory_start(s: &mut Cursive) {
     ));
 }
 
-fn memory_clicked(s: &mut Cursive) {
+fn memory_clicked(s: &mut Ui) {
     let (lo, hi) = memtest::PERCENT_RANGE.into_inner();
     let percent =
         read_number(s, MEM_PERCENT).filter(|p| (u32::from(lo)..=u32::from(hi)).contains(p));
@@ -231,7 +231,7 @@ fn memory_clicked(s: &mut Cursive) {
 
 // --- TST-3 ---
 
-fn disk_start(s: &mut Cursive) {
+fn disk_start(s: &mut Ui) {
     let Some(app) = app(s) else { return };
     pop_to_base(s);
     let mut items = vec![(
@@ -265,7 +265,7 @@ fn disk_start(s: &mut Cursive) {
 
 // --- TST-6 ---
 
-fn fsck_start(s: &mut Cursive) {
+fn fsck_start(s: &mut Ui) {
     pop_to_base(s);
     let items = vec![
         (
@@ -294,13 +294,13 @@ fn fsck_start(s: &mut Cursive) {
 }
 
 /// CFG-2: the repair asks for the PIN first.
-fn fsck_repair_confirm(s: &mut Cursive, roles: Vec<PartRole>) {
+fn fsck_repair_confirm(s: &mut Ui, roles: Vec<PartRole>) {
     crate::ui::pin::require(s, "repair file system", move |s| {
         fsck_repair_dialog(s, roles.clone())
     });
 }
 
-fn fsck_repair_dialog(s: &mut Cursive, roles: Vec<PartRole>) {
+fn fsck_repair_dialog(s: &mut Ui, roles: Vec<PartRole>) {
     let Some(app) = app(s) else { return };
     let layout = app.backend.layout().ok();
     let list = roles
@@ -336,7 +336,7 @@ fn fsck_repair_dialog(s: &mut Cursive, roles: Vec<PartRole>) {
 
 // --- TST-2 ---
 
-fn memtest86_start(s: &mut Cursive) {
+fn memtest86_start(s: &mut Ui) {
     use crate::hwtest::memtest86;
     let Some(a) = app(s) else { return };
     pop_to_base(s);
@@ -366,7 +366,7 @@ fn memtest86_start(s: &mut Cursive) {
 
 // --- TST-7 ---
 
-fn health_start(s: &mut Cursive) {
+fn health_start(s: &mut Ui) {
     let Some(a) = app(s) else { return };
     pop_to_base(s);
     let mut items = vec![("All disks".to_string(), Vec::new())];
@@ -396,7 +396,7 @@ fn health_start(s: &mut Cursive) {
 
 // --- TST-8 ---
 
-fn stick_start(s: &mut Cursive) {
+fn stick_start(s: &mut Ui) {
     use crate::hwtest::sticktest::{candidates, label};
     let Some(a) = app(s) else { return };
     pop_to_base(s);
@@ -422,11 +422,11 @@ fn stick_start(s: &mut Cursive) {
 }
 
 /// CFG-2: the destructive stick test asks for the PIN first.
-fn stick_confirm(s: &mut Cursive, d: crate::backend::BlockDevice) {
+fn stick_confirm(s: &mut Ui, d: crate::backend::BlockDevice) {
     crate::ui::pin::require(s, "stick write test", move |s| stick_dialog(s, d.clone()));
 }
 
-fn stick_dialog(s: &mut Cursive, d: crate::backend::BlockDevice) {
+fn stick_dialog(s: &mut Ui, d: crate::backend::BlockDevice) {
     use crate::hwtest::sticktest::{StickTestRequest, CONFIRM_WORD};
     let parts = if d.partitions.is_empty() {
         "no partitions".to_string()
@@ -469,7 +469,7 @@ fn stick_dialog(s: &mut Cursive, d: crate::backend::BlockDevice) {
 
 const STRESS_MINUTES: &str = "test_stress_minutes";
 
-fn stress_start(s: &mut Cursive) {
+fn stress_start(s: &mut Ui) {
     use crate::hwtest::stress;
     pop_to_base(s);
     let layout = LinearLayout::vertical()

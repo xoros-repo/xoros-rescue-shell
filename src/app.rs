@@ -1,4 +1,4 @@
-//! Application state shared by the UI and the CLI (no cursive, ARCH-1).
+//! Application state shared by the UI and the CLI (no ratatui, ARCH-1).
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};

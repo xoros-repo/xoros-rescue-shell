@@ -3,10 +3,10 @@
 
 use std::sync::Arc;
 
-use cursive::menu::Tree;
-use cursive::traits::*;
-use cursive::views::{Dialog, EditView, ScrollView, SelectView, TextView};
-use cursive::Cursive;
+use crate::ui::tk::menu::Tree;
+use crate::ui::tk::traits::*;
+use crate::ui::tk::views::{Dialog, EditView, ScrollView, SelectView, TextView};
+use crate::ui::tk::Ui;
 
 use crate::constants::{APP_NAME, APP_VERSION};
 use crate::logs::{read_log, search, LogSource};
@@ -35,7 +35,7 @@ pub fn menu() -> Tree {
         .leaf(texts::TITLE_ABOUT, about)
 }
 
-fn show_log(s: &mut Cursive, src: LogSource) {
+fn show_log(s: &mut Ui, src: LogSource) {
     let text = read_log(src).unwrap_or_else(|e| e);
     let text = if text.trim().is_empty() {
         "(empty)".to_string()
@@ -43,7 +43,7 @@ fn show_log(s: &mut Cursive, src: LogSource) {
         text
     };
     let view = ScrollView::new(TextView::new(text.clone()).with_name(LOG_TEXT))
-        .scroll_strategy(cursive::view::ScrollStrategy::StickToBottom)
+        .scroll_strategy(crate::ui::tk::views::ScrollStrategy::StickToBottom)
         .max_width(MAX_W)
         .max_height(MAX_H);
     let shared = Arc::new(text);
@@ -61,8 +61,8 @@ fn show_log(s: &mut Cursive, src: LogSource) {
     );
 }
 
-fn ask_search(s: &mut Cursive, title: &'static str, text: Arc<String>) {
-    let run = move |s: &mut Cursive, q: &str| {
+fn ask_search(s: &mut Ui, title: &'static str, text: Arc<String>) {
+    let run = move |s: &mut Ui, q: &str| {
         s.pop_layer();
         if q.is_empty() {
             return;
@@ -89,7 +89,7 @@ fn ask_search(s: &mut Cursive, title: &'static str, text: Arc<String>) {
 }
 
 /// List of background tasks with progress; Enter opens the progress dialog (UI-3).
-fn show_tasks(s: &mut Cursive) {
+fn show_tasks(s: &mut Ui) {
     let Some(app) = app(s) else { return };
     let running = app.tasks.running();
     let all = app.tasks.all();
@@ -134,24 +134,23 @@ fn show_tasks(s: &mut Cursive) {
     );
 }
 
-fn subshell(s: &mut Cursive) {
+fn subshell(s: &mut Ui) {
     dialogs::confirm(s, "Subshell", texts::SUBSHELL_INFO, "Start", |s| {
         crate::ui::pin::require(s, "subshell", start_subshell);
     });
 }
 
-fn start_subshell(s: &mut Cursive) {
+fn start_subshell(s: &mut Ui) {
     let Some(app) = app(s) else { return };
-    let state = s.dump();
+    // The shell runs on the UI thread: no events are read meanwhile.
     let r = crate::terminal::run_subshell(&app.backend.run_dir());
-    s.restore(state);
     s.clear();
     if let Err(e) = r {
         dialogs::error(s, "Cannot start the subshell.", &e);
     }
 }
 
-fn about(s: &mut Cursive) {
+fn about(s: &mut Ui) {
     let Some(app) = app(s) else { return };
     let text = format!(
         "{APP_NAME} {APP_VERSION}\n\nBackend: {}\nLog file: {}\n\n\
@@ -168,7 +167,7 @@ fn about(s: &mut Cursive) {
 const JOB_DIALOG: &str = "tools_job_progress";
 
 /// Result of a job as a text screen or error dialog.
-pub fn show_job_end(s: &mut Cursive, title: &str, end: JobEnd<String>) {
+pub fn show_job_end(s: &mut Ui, title: &str, end: JobEnd<String>) {
     match end {
         JobEnd::Ok(t) => s.add_layer(dialogs::text_screen(title, &t)),
         JobEnd::Cancelled => dialogs::info(s, title, "Cancelled."),
@@ -177,7 +176,7 @@ pub fn show_job_end(s: &mut Cursive, title: &str, end: JobEnd<String>) {
 }
 
 /// LOG-2: diagnostics bundle to a stick.
-fn diagnostics_bundle(s: &mut Cursive) {
+fn diagnostics_bundle(s: &mut Ui) {
     pop_to_base(s);
     crate::ui::backup::choose_stick(s, "Diagnostics bundle", |s, stick| {
         jobs::run(
@@ -200,7 +199,7 @@ fn diagnostics_bundle(s: &mut Cursive) {
 }
 
 /// SSH-1: status with Start/Stop and loading authorized keys from a stick.
-fn remote_access(s: &mut Cursive) {
+fn remote_access(s: &mut Ui) {
     let Some(app) = app(s) else { return };
     let env = crate::net::NetEnv::for_backend(app.backend.as_ref());
     let st = crate::net::ssh::status(&env);
@@ -223,7 +222,7 @@ fn remote_access(s: &mut Cursive) {
     );
 }
 
-fn ssh_action(s: &mut Cursive, start: bool) {
+fn ssh_action(s: &mut Ui, start: bool) {
     let title = if start {
         "Start remote access"
     } else {
@@ -256,7 +255,7 @@ fn ssh_action(s: &mut Cursive, start: bool) {
     );
 }
 
-fn ssh_keys_from_stick(s: &mut Cursive) {
+fn ssh_keys_from_stick(s: &mut Ui) {
     crate::ui::backup::choose_stick(s, "SSH keys from stick", |s, stick| {
         let Some(app) = app(s) else { return };
         let env = crate::net::NetEnv::for_backend(app.backend.as_ref());

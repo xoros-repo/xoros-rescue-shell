@@ -1,8 +1,8 @@
 //! Status menu: overview (SYS-1), hardware (SYS-2), storage (SYS-3), network details (SYS-4),
 //! system report to a stick (SYS-5).
 
-use cursive::menu::Tree;
-use cursive::Cursive;
+use crate::ui::tk::menu::Tree;
+use crate::ui::tk::Ui;
 
 use crate::texts;
 use crate::ui::dialogs::text_screen;
@@ -20,22 +20,22 @@ pub fn menu() -> Tree {
         .leaf("Save system report", save_report)
 }
 
-pub fn show_hardware(s: &mut Cursive) {
+pub fn show_hardware(s: &mut Ui) {
     let Some(app) = app(s) else { return };
     let hw = crate::hw::hardware_info(&app.backend.host_paths());
     let text = crate::report::hardware_text(&hw);
     show_screen(s, text_screen(texts::TITLE_HARDWARE, &text));
 }
 
-pub fn show_storage(s: &mut Cursive) {
+pub fn show_storage(s: &mut Ui) {
     let Some(app) = app(s) else { return };
     let text = crate::report::storage_text(&app.backend.block_devices(), &app.backend.layout());
     show_screen(s, text_screen(texts::TITLE_STORAGE, &text));
 }
 
 /// SYS-4: network details with a Refresh button.
-pub fn show_network(s: &mut Cursive) {
-    use cursive::views::Dialog;
+pub fn show_network(s: &mut Ui) {
+    use crate::ui::tk::views::Dialog;
     let Some(app) = app(s) else { return };
     let env = crate::net::NetEnv::for_backend(app.backend.as_ref());
     let text = crate::net::details::text(&crate::net::details::collect(&env));
@@ -51,7 +51,7 @@ pub fn show_network(s: &mut Cursive) {
 }
 
 /// SYS-5: write the system report (text + JSON) to a stick.
-fn save_report(s: &mut Cursive) {
+fn save_report(s: &mut Ui) {
     pop_to_base(s);
     crate::ui::backup::choose_stick(s, "Save system report", |s, stick| {
         crate::ui::jobs::run(

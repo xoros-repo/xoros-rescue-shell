@@ -1,4 +1,4 @@
-//! Rescue-side networking (NET-*, SYS-4, SSH-1) without cursive (ARCH-1).
+//! Rescue-side networking (NET-*, SYS-4, SSH-1) without ratatui (ARCH-1).
 //!
 //! - [`info`]: interface summary for the status screen;
 //! - [`config`]: automatic DHCP on Ethernet (`.network` files for systemd-networkd, `udhcpc`

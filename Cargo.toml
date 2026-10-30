@@ -10,11 +10,13 @@ repository = "https://github.com/xoros-repo/xoros-rescue-shell.git"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-# UI only (src/ui/): cursive with the crossterm backend (UI-1, ARCH-1).
-cursive = { version = "0.21.1", default-features = false, features = ["crossterm-backend"] }
-# Same crossterm as cursive's backend: the subshell (SH-1) takes over keys its event reader
-# already read from the tty.
+# UI only (src/ui/): ratatui with the crossterm backend (UI-1, ARCH-1).
+ratatui = { version = "0.30.2", default-features = false, features = ["crossterm_0_29"] }
+# Same crossterm as ratatui's backend: the UI reads its events, and the subshell (SH-1) takes
+# over keys its event reader already read from the tty.
 crossterm = "0.29.0"
+# Display width of text (box drawing, ellipsis) for the UI layout; same version as ratatui.
+unicode-width = "0.2"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 libc = "0.2"
 log = { version = "0.4", features = ["std"] }

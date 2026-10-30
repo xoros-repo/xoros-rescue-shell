@@ -1,5 +1,5 @@
 //! Persistent partition maintenance (BAK-6) and raw partition images (BAK-7). Run in worker
-//! threads (UI-3); no cursive here (ARCH-1).
+//! threads (UI-3); no ratatui here (ARCH-1).
 //!
 //! - BAK-6: `e2fsck -y`, then a mount test; if the file system still cannot be mounted the UI
 //!   offers "Re-create file system" (`mke2fs -t ext4 -L <label> -U <uuid>`, typed confirmation).

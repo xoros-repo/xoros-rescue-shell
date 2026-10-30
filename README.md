@@ -6,7 +6,7 @@ Xoros Rescue Shell is a console (TUI) app that allows you to interact with the X
 
 It is designed to provide all necessary tools to manage the system and to perform system recovery operations.
 
-It is written in Rust on top of [cursive](https://github.com/gyscos/cursive) (crossterm backend) and is packaged
+It is written in Rust on top of [ratatui](https://ratatui.rs) (crossterm backend) and is packaged
 for Yocto/OpenEmbedded via `cargo-bitbake` recipes.
 
 ## Status
@@ -181,7 +181,8 @@ src/
 ├── clock.rs cmd.rs constants.rs hw.rs logging.rs logs.rs power.rs
 ├── report.rs      # text rendering of status/hardware/storage (80x24)
 ├── slots.rs status.rs sysinfo.rs tasks.rs terminal.rs texts.rs
-└── ui/            # cursive screens, one module per menu (only place that uses cursive)
+└── ui/            # screens, one module per menu; ui/tk/ is the widget layer on ratatui
+                   # (the only place that uses ratatui)
 ```
 
 Rust 1.95 is the MSRV (`cargo +1.95.0 build`).

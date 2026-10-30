@@ -5,10 +5,10 @@
 
 use std::sync::{Arc, Mutex};
 
-use cursive::menu::Tree;
-use cursive::traits::*;
-use cursive::views::{Checkbox, Dialog, LinearLayout, ScrollView, SelectView, TextView};
-use cursive::Cursive;
+use crate::ui::tk::menu::Tree;
+use crate::ui::tk::traits::*;
+use crate::ui::tk::views::{Checkbox, Dialog, LinearLayout, ScrollView, SelectView, TextView};
+use crate::ui::tk::Ui;
 
 use crate::app::App;
 use crate::backend::{PartRole, Stick};
@@ -71,7 +71,7 @@ fn partition_checkboxes(app: &App, roles: &[PartitionRole]) -> LinearLayout {
     l
 }
 
-fn checked_roles(s: &mut Cursive, roles: &[PartitionRole]) -> Vec<PartitionRole> {
+fn checked_roles(s: &mut Ui, roles: &[PartitionRole]) -> Vec<PartitionRole> {
     roles
         .iter()
         .copied()
@@ -91,7 +91,7 @@ fn role_list(roles: &[PartitionRole]) -> String {
 }
 
 /// Refuse to start while another write task runs (UI-3).
-fn write_busy(s: &mut Cursive, app: &App) -> bool {
+fn write_busy(s: &mut Ui, app: &App) -> bool {
     match app.tasks.write_running() {
         Some(t) => {
             dialogs::error(
@@ -108,7 +108,7 @@ fn write_busy(s: &mut Cursive, app: &App) -> bool {
 /// Run a backup job in the background; when it ends the progress dialog closes and `on_ok`
 /// shows the result, a failure shows `fail_title` with the full reason (UI-5, BAK-4a).
 fn run_job<T, B, K>(
-    s: &mut Cursive,
+    s: &mut Ui,
     title: &'static str,
     fail_title: &'static str,
     body: B,
@@ -116,7 +116,7 @@ fn run_job<T, B, K>(
 ) where
     T: Send + 'static,
     B: FnOnce(&App, &TaskCtx) -> Result<T, TaskFailure> + Send + 'static,
-    K: FnOnce(&mut Cursive, T) + Send + 'static,
+    K: FnOnce(&mut Ui, T) + Send + 'static,
 {
     let Some(app) = app(s) else { return };
     let result: Arc<Mutex<Option<T>>> = Arc::new(Mutex::new(None));
@@ -125,7 +125,7 @@ fn run_job<T, B, K>(
     let sink = s.cb_sink().clone();
     let on_finish = Box::new(move |snap: crate::tasks::TaskSnapshot| {
         let value = lock(&result).take();
-        let _ = sink.send(Box::new(move |s: &mut Cursive| {
+        let _ = sink.send(Box::new(move |s: &mut Ui| {
             dialogs::remove_named_layer(s, JOB_DIALOG);
             match (snap.state, value) {
                 (TaskState::Succeeded(_), Some(v)) => on_ok(s, v),
@@ -153,9 +153,9 @@ fn run_job<T, B, K>(
 }
 
 /// Let the user pick an external stick; "Refresh" re-reads the list (USB-1).
-pub(crate) fn choose_stick<F>(s: &mut Cursive, purpose: &'static str, on_pick: F)
+pub(crate) fn choose_stick<F>(s: &mut Ui, purpose: &'static str, on_pick: F)
 where
-    F: Fn(&mut Cursive, Stick) + Clone + Send + Sync + 'static,
+    F: Fn(&mut Ui, Stick) + Clone + Send + Sync + 'static,
 {
     let Some(app) = app(s) else { return };
     let sticks = match app.backend.external_sticks() {
@@ -167,7 +167,7 @@ where
     };
     let refresh = {
         let on_pick = on_pick.clone();
-        move |s: &mut Cursive| {
+        move |s: &mut Ui| {
             s.pop_layer();
             choose_stick(s, purpose, on_pick.clone());
         }
@@ -217,9 +217,9 @@ static STICK_LIST_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU
 
 /// USB-1 hot-plug: poll the sticks every 2 s while the list is open and rebuild it when a
 /// stick appears or disappears.
-fn watch_sticks<F>(s: &mut Cursive, purpose: &'static str, on_pick: F, shown: &[Stick])
+fn watch_sticks<F>(s: &mut Ui, purpose: &'static str, on_pick: F, shown: &[Stick])
 where
-    F: Fn(&mut Cursive, Stick) + Clone + Send + Sync + 'static,
+    F: Fn(&mut Ui, Stick) + Clone + Send + Sync + 'static,
 {
     use std::sync::atomic::Ordering;
     let Some(app) = app(s) else { return };
@@ -242,14 +242,13 @@ where
                 }
                 known = now;
                 let on_pick = on_pick.clone();
-                let _ = sink.send(Box::new(move |s: &mut Cursive| {
+                let _ = sink.send(Box::new(move |s: &mut Ui| {
                     if STICK_LIST_GEN.load(Ordering::SeqCst) != gen {
                         return;
                     }
                     // Only when the list is the top layer (not behind a dialog opened from it).
-                    if s.screen_mut().find_layer_from_name(STICK_LIST)
-                        == Some(cursive::views::LayerPosition::FromFront(0))
-                    {
+                    let top = s.screen_len().checked_sub(1);
+                    if top.is_some() && s.find_layer_from_name(STICK_LIST) == top {
                         s.pop_layer();
                         choose_stick(s, purpose, on_pick);
                     }
@@ -264,7 +263,7 @@ where
 // --------------------------------------------------------------------------------------------
 // export (BAK-1..3)
 
-fn export_start(s: &mut Cursive) {
+fn export_start(s: &mut Ui) {
     let Some(app) = app(s) else { return };
     pop_to_base(s);
     if write_busy(s, &app) {
@@ -293,7 +292,7 @@ fn export_start(s: &mut Cursive) {
     ));
 }
 
-fn export_confirm(s: &mut Cursive, roles: Vec<PartitionRole>, stick: Stick) {
+fn export_confirm(s: &mut Ui, roles: Vec<PartitionRole>, stick: Stick) {
     let Some(app) = app(s) else { return };
     let req = ExportRequest { roles, stick };
     // Mounting and statvfs are quick; the space check is done before the task starts (BAK-3).
@@ -331,7 +330,7 @@ fn export_confirm(s: &mut Cursive, roles: Vec<PartitionRole>, stick: Stick) {
 // --------------------------------------------------------------------------------------------
 // import (BAK-4, BAK-4a, BAK-5)
 
-fn import_start(s: &mut Cursive) {
+fn import_start(s: &mut Ui) {
     let Some(app) = app(s) else { return };
     pop_to_base(s);
     if write_busy(s, &app) {
@@ -340,7 +339,7 @@ fn import_start(s: &mut Cursive) {
     choose_stick(s, texts::TITLE_IMPORT, import_list);
 }
 
-fn import_list(s: &mut Cursive, stick: Stick) {
+fn import_list(s: &mut Ui, stick: Stick) {
     let Some(app) = app(s) else { return };
     let found = match backup_jobs::list_stick_backups(app.backend.as_ref(), &stick) {
         Ok(f) => f,
@@ -381,7 +380,7 @@ fn import_list(s: &mut Cursive, stick: Stick) {
 }
 
 /// Metadata screen with the machine mismatch warning (BAK-4).
-fn import_details(s: &mut Cursive, stick: Stick, b: FoundBackup) {
+fn import_details(s: &mut Ui, stick: Stick, b: FoundBackup) {
     let Some(app) = app(s) else { return };
     let machine = device_identity(app.backend.as_ref()).machine;
     let text = describe_backup(&b, machine.as_deref());
@@ -414,13 +413,13 @@ fn import_details(s: &mut Cursive, stick: Stick, b: FoundBackup) {
 }
 
 /// Show and log why a backup cannot be imported (BAK-4a).
-fn refuse(s: &mut Cursive, reason: &str) {
+fn refuse(s: &mut Ui, reason: &str) {
     let msg = format!("The backup cannot be imported: {reason}");
     log::error!("{msg}");
     s.add_layer(dialogs::text_screen("Import refused", &msg));
 }
 
-fn import_options(s: &mut Cursive, stick: Stick, b: FoundBackup) {
+fn import_options(s: &mut Ui, stick: Stick, b: FoundBackup) {
     let Some(app) = app(s) else { return };
     // BAK-4a: refuse right away when the backup is known to be unusable.
     let metadata = match &b.info.metadata {
@@ -477,7 +476,7 @@ fn import_options(s: &mut Cursive, stick: Stick, b: FoundBackup) {
 }
 
 /// UI-4: show what will be overwritten, then import.
-fn import_confirm(s: &mut Cursive, req: ImportRequest) {
+fn import_confirm(s: &mut Ui, req: ImportRequest) {
     let Some(app) = app(s) else { return };
     let layout = app.backend.layout().ok();
     let targets: Vec<String> = req
@@ -532,7 +531,7 @@ fn reset_title(full: bool) -> &'static str {
     }
 }
 
-fn reset_start(s: &mut Cursive, full: bool) {
+fn reset_start(s: &mut Ui, full: bool) {
     let Some(app) = app(s) else { return };
     pop_to_base(s);
     if write_busy(s, &app) {
@@ -559,7 +558,7 @@ fn reset_start(s: &mut Cursive, full: bool) {
     ));
 }
 
-fn reset_options(s: &mut Cursive, full: bool) {
+fn reset_options(s: &mut Ui, full: bool) {
     let explanation = if full {
         texts::FULL_RESET_EXPLANATION
     } else {
@@ -587,7 +586,7 @@ fn reset_options(s: &mut Cursive, full: bool) {
     ));
 }
 
-fn reset_confirm(s: &mut Cursive, full: bool, reset_rescue_settings: bool) {
+fn reset_confirm(s: &mut Ui, full: bool, reset_rescue_settings: bool) {
     let Some(app) = app(s) else { return };
     let layout = app.backend.layout().ok();
     let dev = |r: PartRole| {

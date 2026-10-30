@@ -12,7 +12,7 @@
 //! [`core`]). Names and numbers ([`Slot::name`], [`PartRole::label`], ...) come from
 //! `xoros_core`.
 //!
-//! Nothing in this module depends on cursive (ARCH-1).
+//! Nothing in this module depends on ratatui (ARCH-1).
 
 pub mod core;
 pub mod sim;

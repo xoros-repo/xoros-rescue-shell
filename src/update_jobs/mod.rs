@@ -1,6 +1,6 @@
 //! Slot updates from the network (OTA-1..11) and from a USB stick (USB-2..5) on top of the
 //! crate's image sources and flash engine (`xoros_core::source`, `xoros_core::flash`).
-//! No cursive (ARCH-1): the UI and the CLI run these functions inside a
+//! No ratatui (ARCH-1): the UI and the CLI run these functions inside a
 //! [`TaskRunner`](crate::tasks::TaskRunner) worker.
 //!
 //! Flow: [`device_target`] (OTA-1) -> [`check`] (fetch and check the manifest, list images,

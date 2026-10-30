@@ -1,6 +1,6 @@
 //! Backup, restore and factory reset of the persistent partitions (BAK-*, RST-*).
 //!
-//! UI independent (no cursive, ARCH-1). All functions are blocking; run them in a worker thread
+//! UI independent (no ratatui, ARCH-1). All functions are blocking; run them in a worker thread
 //! and pass a progress callback and a [`CancelToken`] (UI-3). Mounting, `e2fsck` and `mke2fs`
 //! are done by the caller ([`tools`] has injectable helpers).
 //!

@@ -5,10 +5,10 @@
 
 use std::str::FromStr;
 
-use cursive::menu::Tree;
-use cursive::traits::*;
-use cursive::views::{Dialog, EditView, LinearLayout, ScrollView, SelectView, TextView};
-use cursive::Cursive;
+use crate::ui::tk::menu::Tree;
+use crate::ui::tk::traits::*;
+use crate::ui::tk::views::{Dialog, EditView, LinearLayout, ScrollView, SelectView, TextView};
+use crate::ui::tk::Ui;
 use xoros_core::env::Suffix;
 use xoros_core::flash::FlashOptions;
 use xoros_core::manifest::Target;
@@ -53,7 +53,7 @@ fn field(label: &str, name: &str, value: &str) -> LinearLayout {
         )
 }
 
-fn read_field(s: &mut Cursive, name: &str) -> String {
+fn read_field(s: &mut Ui, name: &str) -> String {
     s.call_on_name(name, |v: &mut EditView| v.get_content().trim().to_string())
         .unwrap_or_default()
 }
@@ -61,7 +61,7 @@ fn read_field(s: &mut Cursive, name: &str) -> String {
 // --------------------------------------------------------------------------------------------
 // OTA (OTA-1, OTA-10, OTA-11)
 
-fn ota_start(s: &mut Cursive) {
+fn ota_start(s: &mut Ui) {
     let Some(app) = app(s) else { return };
     pop_to_base(s);
     let dev = device_target(app.backend.as_ref());
@@ -106,7 +106,7 @@ fn ota_start(s: &mut Cursive) {
     ));
 }
 
-fn ota_check_clicked(s: &mut Cursive) {
+fn ota_check_clicked(s: &mut Ui) {
     let Some(app) = app(s) else { return };
     let base = read_field(s, F_BASE);
     let version = read_field(s, F_VERSION);
@@ -158,7 +158,7 @@ fn ota_check_clicked(s: &mut Cursive) {
 // --------------------------------------------------------------------------------------------
 // USB (USB-2)
 
-fn usb_start(s: &mut Cursive) {
+fn usb_start(s: &mut Ui) {
     pop_to_base(s);
     crate::ui::backup::choose_stick(s, "Update from a stick", |s, stick| {
         let Some(app) = app(s) else { return };
@@ -191,7 +191,7 @@ fn usb_start(s: &mut Cursive) {
 // --------------------------------------------------------------------------------------------
 // check -> choose image -> choose target -> confirm -> write
 
-fn start_check(s: &mut Cursive, origin: Origin) {
+fn start_check(s: &mut Ui, origin: Origin) {
     let Some(app) = app(s) else { return };
     let rescue = lock(&app.rescue_check).sha256().map(str::to_string);
     let o = origin.clone();
@@ -209,7 +209,7 @@ fn start_check(s: &mut Cursive, origin: Origin) {
     );
 }
 
-fn show_check(s: &mut Cursive, c: CheckResult) {
+fn show_check(s: &mut Ui, c: CheckResult) {
     let mut select = SelectView::<ImageRow>::new();
     for r in &c.rootfs {
         select.add_item(r.label(), r.clone());
@@ -260,7 +260,7 @@ fn slot_text(app: &crate::app::App, slot: Slot) -> String {
     format!("{} ({device}, {}): {content}", slot.name(), slot.label())
 }
 
-fn choose_targets(s: &mut Cursive, c: CheckResult, row: ImageRow) {
+fn choose_targets(s: &mut Ui, c: CheckResult, row: ImageRow) {
     let Some(app) = app(s) else { return };
     let text = format!(
         "Install {} ({}).\n\n{}\n{}",
@@ -278,7 +278,7 @@ fn choose_targets(s: &mut Cursive, c: CheckResult, row: ImageRow) {
     });
 }
 
-fn confirm_write(s: &mut Cursive, c: CheckResult, row: ImageRow, targets: Targets) {
+fn confirm_write(s: &mut Ui, c: CheckResult, row: ImageRow, targets: Targets) {
     let Some(app) = app(s) else { return };
     let mut text = String::from("This overwrites:\n");
     for slot in targets.slots() {
@@ -310,9 +310,9 @@ fn confirm_write(s: &mut Cursive, c: CheckResult, row: ImageRow, targets: Target
     };
     // OTA-3: a downgrade needs an extra confirmation; CFG-2: then the PIN.
     let downgrade = row.is_downgrade(targets);
-    let go = move |s: &mut Cursive| {
+    let go = move |s: &mut Ui| {
         let req = req.clone();
-        let write = move |s: &mut Cursive| {
+        let write = move |s: &mut Ui| {
             let req = req.clone();
             crate::ui::pin::require(s, "slot update", move |s| start_write(s, req.clone()));
         };
@@ -331,7 +331,7 @@ fn confirm_write(s: &mut Cursive, c: CheckResult, row: ImageRow, targets: Target
     }
 }
 
-fn start_write(s: &mut Cursive, req: UpdateRequest) {
+fn start_write(s: &mut Ui, req: UpdateRequest) {
     let Some(app) = app(s) else { return };
     if let Some(t) = app.tasks.write_running() {
         dialogs::error(

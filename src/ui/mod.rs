@@ -1,4 +1,5 @@
-//! cursive screens and dialogs, one module per menu (UI-*). The only place that uses cursive.
+//! Screens and dialogs, one module per menu (UI-*), on the widget layer [`tk`] (ratatui). The
+//! only place that uses ratatui.
 
 pub mod backup;
 pub mod boot;
@@ -13,17 +14,19 @@ pub mod settings;
 pub mod status;
 pub mod tests;
 pub mod theme;
+#[cfg(test)]
+mod tui_tests;
+pub mod tk;
 pub mod tools;
 pub mod update;
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use cursive::event::{Event, Key};
-use cursive::menu;
-use cursive::traits::*;
-use cursive::views::{LinearLayout, Panel, ScrollView, TextView};
-use cursive::Cursive;
+use crate::ui::tk::menu;
+use crate::ui::tk::traits::*;
+use crate::ui::tk::views::{LinearLayout, Panel, ScrollView, TextView};
+use crate::ui::tk::{Event, Key, Ui};
 
 use crate::app::App;
 use crate::constants::{APP_NAME, APP_VERSION};
@@ -37,20 +40,20 @@ pub const STATUS_LINE: &str = "status_line";
 /// Number of layers that form the base screen (the Status screen with the status line).
 const BASE_LAYERS: usize = 1;
 
-/// The shared application state stored as cursive user data.
-pub fn app(s: &mut Cursive) -> Option<Arc<App>> {
-    s.user_data::<Arc<App>>().cloned()
+/// The shared application state.
+pub fn app(s: &mut Ui) -> Option<Arc<App>> {
+    Some(s.app())
 }
 
 /// Close all screens/dialogs above the base Status screen.
-pub fn pop_to_base(s: &mut Cursive) {
-    while s.screen().len() > BASE_LAYERS {
+pub fn pop_to_base(s: &mut Ui) {
+    while s.screen_len() > BASE_LAYERS {
         s.pop_layer();
     }
 }
 
 /// Show a screen opened from the menu: replaces other open screens.
-pub fn show_screen<V: View>(s: &mut Cursive, view: V) {
+pub fn show_screen<V: View>(s: &mut Ui, view: V) {
     pop_to_base(s);
     s.add_layer(view);
 }
@@ -84,7 +87,7 @@ fn status_line_text(app: &App, width: usize) -> String {
 }
 
 /// Refresh the bottom status line.
-pub fn update_status_line(s: &mut Cursive) {
+pub fn update_status_line(s: &mut Ui) {
     let Some(app) = app(s) else { return };
     let width = s.screen_size().x;
     let text = status_line_text(&app, width);
@@ -92,16 +95,16 @@ pub fn update_status_line(s: &mut Cursive) {
 }
 
 /// Recompute the Status screen text.
-pub fn refresh_status(s: &mut Cursive) {
+pub fn refresh_status(s: &mut Ui) {
     let Some(app) = app(s) else { return };
     let text = crate::report::status_text(&app.status());
     s.call_on_name(STATUS_TEXT, |v: &mut TextView| v.set_content(text));
     update_status_line(s);
 }
 
-fn build_menubar(s: &mut Cursive) {
-    // Rebuilt on every Esc: cursive keeps the last focused menu otherwise, so the bar would
-    // reopen on the menu of the previous action instead of the first one.
+fn build_menubar(s: &mut Ui) {
+    // Rebuilt on every Esc, so the menus show the current state and the bar opens on the
+    // first menu.
     s.menubar().clear();
     s.menubar()
         .add_subtree(texts::MENU_STATUS, status::menu())
@@ -112,7 +115,6 @@ fn build_menubar(s: &mut Cursive) {
         .add_subtree(texts::MENU_TESTS, tests::menu())
         .add_subtree(texts::MENU_TOOLS, tools::menu())
         .add_subtree(texts::MENU_POWER, power::menu());
-    s.set_autohide_menu(false);
 }
 
 fn base_layer() -> impl View {
@@ -134,10 +136,10 @@ static TICK_SEEN: Mutex<(usize, u64)> = Mutex::new((BASE_LAYERS, 0));
 /// Ticker callback: status line, and the Status screen when it becomes visible again after a
 /// dialog/screen was closed or when a task finished while it is visible. Actions change the
 /// state (update, boot settings, reset, tests), so the screen is never left stale.
-fn on_tick(s: &mut Cursive) {
+fn on_tick(s: &mut Ui) {
     update_status_line(s);
     let Some(app) = app(s) else { return };
-    let layers = s.screen().len();
+    let layers = s.screen_len();
     let finished = app.tasks.finished_count();
     let refresh = {
         let mut seen = crate::tasks::lock(&TICK_SEEN);
@@ -155,7 +157,7 @@ fn on_tick(s: &mut Cursive) {
 }
 
 /// Periodic redraw and status line update while the UI runs (progress bars, UI-3).
-fn start_ticker(s: &Cursive) {
+fn start_ticker(s: &Ui) {
     let sink = s.cb_sink().clone();
     let _ = std::thread::Builder::new()
         .name("ui-ticker".into())
@@ -167,31 +169,36 @@ fn start_ticker(s: &Cursive) {
         });
 }
 
-/// Run the TUI until the user quits (the app normally runs until reboot).
-pub fn run(app: App) -> Result<(), String> {
-    let app = Arc::new(app);
-    let mut siv = Cursive::new();
-    siv.set_theme(theme::named(&crate::settings::current().theme));
-    siv.set_user_data(Arc::clone(&app));
+/// The UI with the Status screen, the menu bar and the global keys (no background work).
+fn build(app: Arc<App>) -> Ui {
+    let mut siv = Ui::new(app, theme::named(&crate::settings::current().theme));
     build_menubar(&mut siv);
     siv.add_fullscreen_layer(base_layer());
 
+    // A click on the menu bar opens it with menus built like for Esc.
+    siv.set_menu_builder(build_menubar);
     // UI-2: Esc opens the menu; Ctrl-C does not exit.
     siv.add_global_callback(Key::Esc, |s| {
         build_menubar(s);
         s.select_menubar();
     });
-    siv.clear_global_callbacks(Event::CtrlChar('c'));
     siv.set_on_pre_event(Event::CtrlChar('c'), |s| {
         dialogs::info(s, APP_NAME, texts::CTRL_C_HINT);
     });
     siv.add_global_callback('r', |s| {
-        if s.screen().len() == BASE_LAYERS {
+        if s.screen_len() == BASE_LAYERS {
             refresh_status(s);
         }
     });
 
     refresh_status(&mut siv);
+    siv
+}
+
+/// Run the TUI until the user quits (the app normally runs until reboot).
+pub fn run(app: App) -> Result<(), String> {
+    let app = Arc::new(app);
+    let mut siv = build(Arc::clone(&app));
     // SYS-1: rescue image hash in the background, "checking..." until done.
     let sink = siv.cb_sink().clone();
     if let Err(e) = app.start_rescue_check(Some(Box::new(move |_| {
@@ -205,8 +212,7 @@ pub fn run(app: App) -> Result<(), String> {
     refresh_status(&mut siv);
     start_ticker(&siv);
 
-    siv.try_run_with(cursive::backends::crossterm::Backend::init)
-        .map_err(|e| e.to_string())?;
+    siv.run().map_err(|e| e.to_string())?;
     app.tasks.cancel_all();
     stop_ssh_if_started(&app);
     Ok(())

@@ -1,4 +1,4 @@
-//! XorOS rescue shell. Everything outside `ui` is independent of cursive (ARCH-1).
+//! XorOS rescue shell. Everything outside `ui` is independent of ratatui (ARCH-1).
 
 pub mod app;
 pub mod backend;

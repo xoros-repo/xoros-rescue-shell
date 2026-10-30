@@ -7,7 +7,7 @@
 //! cancel, UI-3) through [`run_recorded`], which turns the outcome into a [`TestResult`]
 //! (pass/warning/fail/aborted/error, duration, details), logs it (LOG-3) and keeps it for the
 //! session in [`ResultStore`]: in memory and in `<run dir>/test-results/`, so later CLI
-//! calls, a restarted TUI and the diagnostics bundle (LOG-2) see it too. No cursive (ARCH-1).
+//! calls, a restarted TUI and the diagnostics bundle (LOG-2) see it too. No ratatui (ARCH-1).
 
 pub mod diskread;
 pub mod fsck;

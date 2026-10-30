@@ -3,7 +3,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use cursive::Cursive;
+use crate::ui::tk::Ui;
 
 use crate::app::App;
 use crate::tasks::{lock, TaskCtx, TaskFailure, TaskKind, TaskSnapshot, TaskState};
@@ -20,7 +20,7 @@ pub enum JobEnd<T> {
 /// Run `body` in a task named `title` with a progress dialog called `dialog`; when it ends the
 /// dialog closes and `on_end` runs on the UI thread.
 pub fn run<T, B, K>(
-    s: &mut Cursive,
+    s: &mut Ui,
     title: &str,
     kind: TaskKind,
     dialog: &'static str,
@@ -29,7 +29,7 @@ pub fn run<T, B, K>(
 ) where
     T: Send + 'static,
     B: FnOnce(&App, &TaskCtx) -> Result<T, TaskFailure> + Send + 'static,
-    K: FnOnce(&mut Cursive, JobEnd<T>) + Send + 'static,
+    K: FnOnce(&mut Ui, JobEnd<T>) + Send + 'static,
 {
     let Some(app) = crate::ui::app(s) else { return };
     let result: Arc<Mutex<Option<T>>> = Arc::new(Mutex::new(None));
@@ -38,7 +38,7 @@ pub fn run<T, B, K>(
     let sink = s.cb_sink().clone();
     let on_finish = Box::new(move |snap: TaskSnapshot| {
         let value = lock(&result).take();
-        let _ = sink.send(Box::new(move |s: &mut Cursive| {
+        let _ = sink.send(Box::new(move |s: &mut Ui| {
             dialogs::remove_named_layer(s, dialog);
             let end = match (snap.state, value) {
                 (TaskState::Succeeded(_), Some(v)) => JobEnd::Ok(v),

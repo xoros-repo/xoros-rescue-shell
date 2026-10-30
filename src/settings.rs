@@ -27,7 +27,7 @@ use crate::constants::{
 };
 
 /// Themes known to [`crate::ui::theme`].
-pub const THEMES: &[&str] = &["default", "dark", "mono"];
+pub const THEMES: &[&str] = &["default", "dark", "mono", "norton"];
 
 /// Allowed PIN length (digits only, CFG-2).
 pub const PIN_LEN: std::ops::RangeInclusive<usize> = 4..=12;

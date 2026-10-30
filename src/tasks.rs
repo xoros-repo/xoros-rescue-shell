@@ -3,7 +3,7 @@
 //! Long operations (hashing, downloads, writes, tests) run in worker threads. The UI polls
 //! [`TaskHandle::snapshot`] to draw a progress bar and calls [`TaskHandle::cancel`]. Only one
 //! [`TaskKind::Write`] task may run at a time (UI-3); power actions check
-//! [`TaskRunner::write_running`] (PWR-2). No cursive dependency (ARCH-1).
+//! [`TaskRunner::write_running`] (PWR-2). No ratatui dependency (ARCH-1).
 
 use std::fmt;
 use std::panic::{catch_unwind, AssertUnwindSafe};

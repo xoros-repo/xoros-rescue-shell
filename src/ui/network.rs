@@ -5,12 +5,12 @@
 use std::collections::BTreeMap;
 use std::time::SystemTime;
 
-use cursive::menu::Tree;
-use cursive::traits::*;
-use cursive::views::{
+use crate::ui::tk::menu::Tree;
+use crate::ui::tk::traits::*;
+use crate::ui::tk::views::{
     Button, Checkbox, Dialog, EditView, LinearLayout, ListView, ScrollView, SelectView, TextView,
 };
-use cursive::Cursive;
+use crate::ui::tk::Ui;
 use xoros_core::net::nm_keyfile::NetConfig;
 
 use crate::net::profile::{self, ConfigInput, WifiInput};
@@ -53,11 +53,11 @@ pub fn menu() -> Tree {
         .leaf("Load from normal system", load_from_normal_system)
 }
 
-fn env(s: &mut Cursive) -> Option<NetEnv> {
+fn env(s: &mut Ui) -> Option<NetEnv> {
     app(s).map(|a| NetEnv::for_backend(a.backend.as_ref()))
 }
 
-fn dhcp(s: &mut Cursive) {
+fn dhcp(s: &mut Ui) {
     pop_to_base(s);
     jobs::run(
         s,
@@ -90,7 +90,7 @@ fn dhcp(s: &mut Cursive) {
     );
 }
 
-fn show_end(s: &mut Cursive, title: &str, end: JobEnd<String>) {
+fn show_end(s: &mut Ui, title: &str, end: JobEnd<String>) {
     match end {
         JobEnd::Ok(t) => s.add_layer(dialogs::text_screen(title, &t)),
         JobEnd::Cancelled => dialogs::info(s, title, "Cancelled."),
@@ -98,7 +98,7 @@ fn show_end(s: &mut Cursive, title: &str, end: JobEnd<String>) {
     }
 }
 
-fn test(s: &mut Cursive) {
+fn test(s: &mut Ui) {
     pop_to_base(s);
     let Some(a) = app(s) else { return };
     let dev = crate::update_jobs::device_target(a.backend.as_ref());
@@ -150,7 +150,7 @@ fn time_text() -> String {
     t
 }
 
-fn date_time(s: &mut Cursive) {
+fn date_time(s: &mut Ui) {
     pop_to_base(s);
     let now = time::format_utc(SystemTime::now());
     let layout = LinearLayout::vertical()
@@ -208,7 +208,7 @@ fn interfaces(env: &NetEnv) -> Vec<(String, bool)> {
         .collect()
 }
 
-fn configure(s: &mut Cursive) {
+fn configure(s: &mut Ui) {
     pop_to_base(s);
     let Some(net_env) = env(s) else { return };
     pick_interface(s, &net_env, "Configure", |s, name, wireless| {
@@ -227,9 +227,9 @@ fn configure(s: &mut Cursive) {
 }
 
 /// Choose an interface; `on_pick(name, wireless)`.
-fn pick_interface<F>(s: &mut Cursive, env: &NetEnv, title: &str, on_pick: F)
+fn pick_interface<F>(s: &mut Ui, env: &NetEnv, title: &str, on_pick: F)
 where
-    F: Fn(&mut Cursive, &str, bool) + Send + Sync + 'static,
+    F: Fn(&mut Ui, &str, bool) + Send + Sync + 'static,
 {
     let state = profile::load_state(env);
     let items: Vec<(String, (String, bool))> = interfaces(env)
@@ -277,7 +277,7 @@ fn security_index(sec: &str) -> usize {
 /// The configuration form of one interface (NET-2). `existing` keeps its secret when the
 /// passphrase is left empty.
 fn config_form(
-    s: &mut Cursive,
+    s: &mut Ui,
     input: ConfigInput,
     wireless: bool,
     existing: Option<NetConfig>,
@@ -401,17 +401,17 @@ fn config_form(
     ));
 }
 
-fn text_of(s: &mut Cursive, name: &str) -> String {
+fn text_of(s: &mut Ui, name: &str) -> String {
     s.call_on_name(name, |v: &mut EditView| v.get_content().to_string())
         .unwrap_or_default()
 }
 
-fn checked(s: &mut Cursive, name: &str) -> bool {
+fn checked(s: &mut Ui, name: &str) -> bool {
     s.call_on_name(name, |v: &mut Checkbox| v.is_checked())
         .unwrap_or(false)
 }
 
-fn read_form(s: &mut Cursive, ifname: &str, is_wifi: bool) -> (ConfigInput, Option<String>) {
+fn read_form(s: &mut Ui, ifname: &str, is_wifi: bool) -> (ConfigInput, Option<String>) {
     let wifi = is_wifi.then(|| WifiInput {
         ssid: text_of(s, F_SSID),
         hidden: checked(s, F_HIDDEN),
@@ -443,7 +443,7 @@ fn read_form(s: &mut Cursive, ifname: &str, is_wifi: bool) -> (ConfigInput, Opti
 }
 
 fn submit_form(
-    s: &mut Cursive,
+    s: &mut Ui,
     ifname: &str,
     is_wifi: bool,
     existing: Option<&NetConfig>,
@@ -484,9 +484,9 @@ fn submit_form(
 }
 
 /// NET-5: ask whether WPA3 passwords may be stored in clear text; `then(s, store)`.
-pub fn ask_store_sae<F>(s: &mut Cursive, sae: &[(String, String)], then: F)
+pub fn ask_store_sae<F>(s: &mut Ui, sae: &[(String, String)], then: F)
 where
-    F: Fn(&mut Cursive, bool) + Send + Sync + 'static,
+    F: Fn(&mut Ui, bool) + Send + Sync + 'static,
 {
     let names = sae
         .iter()
@@ -512,7 +512,7 @@ where
 }
 
 fn start_form_job(
-    s: &mut Cursive,
+    s: &mut Ui,
     c: NetConfig,
     country: Option<String>,
     apply: bool,
@@ -566,7 +566,7 @@ fn start_form_job(
     );
 }
 
-fn remove_config(s: &mut Cursive, ifname: &str) {
+fn remove_config(s: &mut Ui, ifname: &str) {
     let ifname = ifname.to_string();
     dialogs::confirm(
         s,
@@ -592,7 +592,7 @@ fn remove_config(s: &mut Cursive, ifname: &str) {
 }
 
 /// NET-2: scan, then put the chosen network into the form.
-fn scan(s: &mut Cursive, ifname: &str) {
+fn scan(s: &mut Ui, ifname: &str) {
     let ifname = ifname.to_string();
     jobs::run(
         s,
@@ -641,7 +641,7 @@ fn scan(s: &mut Cursive, ifname: &str) {
 
 // --- NET-5: remembered settings ------------------------------------------------------------
 
-fn remembered(s: &mut Cursive) {
+fn remembered(s: &mut Ui) {
     pop_to_base(s);
     jobs::run(
         s,
@@ -701,7 +701,7 @@ fn remembered(s: &mut Cursive) {
     );
 }
 
-fn remember_job(s: &mut Cursive, remember: bool) {
+fn remember_job(s: &mut Ui, remember: bool) {
     if remember {
         let sae = env(s)
             .map(|e| profile::sae_networks(&profile::load_state(&e)))
@@ -714,7 +714,7 @@ fn remember_job(s: &mut Cursive, remember: bool) {
     remember_job_run(s, remember, false);
 }
 
-fn remember_job_run(s: &mut Cursive, remember: bool, store_sae: bool) {
+fn remember_job_run(s: &mut Ui, remember: bool, store_sae: bool) {
     let title = if remember {
         "Remember settings"
     } else {
@@ -746,7 +746,7 @@ fn remember_job_run(s: &mut Cursive, remember: bool, store_sae: bool) {
 
 // --- NET-6 / NET-8: normal system ----------------------------------------------------------
 
-fn use_in_normal_system(s: &mut Cursive) {
+fn use_in_normal_system(s: &mut Ui) {
     pop_to_base(s);
     let Some(env) = env(s) else { return };
     let state = profile::load_state(&env);
@@ -799,7 +799,7 @@ fn use_in_normal_system(s: &mut Cursive) {
     });
 }
 
-fn load_from_normal_system(s: &mut Cursive) {
+fn load_from_normal_system(s: &mut Ui) {
     pop_to_base(s);
     jobs::run(
         s,
@@ -831,7 +831,7 @@ fn load_from_normal_system(s: &mut Cursive) {
     );
 }
 
-fn pick_nm_profile(s: &mut Cursive, p: &nm::NmProfile) {
+fn pick_nm_profile(s: &mut Ui, p: &nm::NmProfile) {
     let c = match &p.config {
         Ok(c) => c.clone(),
         Err(e) => {
@@ -844,7 +844,7 @@ fn pick_nm_profile(s: &mut Cursive, p: &nm::NmProfile) {
         }
     };
     let open_form =
-        move |s: &mut Cursive, ifname: &str, wireless: bool| match crate::cli_net::import_as(
+        move |s: &mut Ui, ifname: &str, wireless: bool| match crate::cli_net::import_as(
             c.clone(),
             ifname,
         ) {

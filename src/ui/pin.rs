@@ -3,9 +3,9 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use cursive::traits::*;
-use cursive::views::{Dialog, EditView, LinearLayout, TextView};
-use cursive::Cursive;
+use crate::ui::tk::traits::*;
+use crate::ui::tk::views::{Dialog, EditView, LinearLayout, TextView};
+use crate::ui::tk::Ui;
 
 use crate::texts;
 use crate::ui::dialogs::{self, closable};
@@ -20,9 +20,9 @@ static FAILURES: Mutex<(u32, Option<Instant>)> = Mutex::new((0, None));
 
 /// Run `then` if no PIN is set or after the user entered the right PIN. `what` names the
 /// action for the log.
-pub fn require<F>(s: &mut Cursive, what: &str, then: F)
+pub fn require<F>(s: &mut Ui, what: &str, then: F)
 where
-    F: Fn(&mut Cursive) + Send + Sync + 'static,
+    F: Fn(&mut Ui) + Send + Sync + 'static,
 {
     let settings = crate::settings::current();
     if !settings.pin_enabled() {
@@ -31,7 +31,7 @@ where
     }
     let then = Arc::new(then);
     let what = what.to_string();
-    let check = move |s: &mut Cursive| {
+    let check = move |s: &mut Ui| {
         let pin = s
             .call_on_name(PIN_INPUT, |v: &mut EditView| v.get_content().to_string())
             .unwrap_or_default();
