@@ -131,9 +131,18 @@ impl CoreBackend {
     fn mount_request(&self, req: mount::MountRequest) -> Result<MountGuard> {
         let g = req.mount(&self.paths).map_err(core_err)?;
         if g.is_temporary() {
-            log::info!("mounted {} at {} ({})", req.node().display(), g.path().display(), g.fs_type());
+            log::info!(
+                "mounted {} at {} ({})",
+                req.node().display(),
+                g.path().display(),
+                g.fs_type()
+            );
         } else {
-            log::info!("{} already mounted at {}", req.node().display(), g.path().display());
+            log::info!(
+                "{} already mounted at {}",
+                req.node().display(),
+                g.path().display()
+            );
         }
         Ok(MountGuard::with_release(
             g.path().to_path_buf(),
@@ -298,7 +307,10 @@ fn ext4_overhead_blocks(d: &[u8], sb: &xoros_core::ext4::Superblock) -> u64 {
     if per_group == 0 || cluster_ratio != 1 {
         return 0;
     }
-    let groups = sb.blocks_count.saturating_sub(first_data).div_ceil(per_group);
+    let groups = sb
+        .blocks_count
+        .saturating_sub(first_data)
+        .div_ceil(per_group);
     if groups > 1 << 24 {
         return 0; // implausible: do not loop forever over a damaged superblock
     }
@@ -541,7 +553,10 @@ impl SystemBackend for CoreBackend {
                     v.name,
                     format_bytes(v.size),
                     v.fs_type,
-                    v.label.as_deref().map(|l| format!("  {l}")).unwrap_or_default()
+                    v.label
+                        .as_deref()
+                        .map(|l| format!("  {l}"))
+                        .unwrap_or_default()
                 ),
                 device: Some(v.node.display().to_string()),
                 fs_type: Some(v.fs_type.as_str().to_string()),
@@ -620,7 +635,11 @@ impl SystemBackend for CoreBackend {
         if !holders.is_empty() {
             return Err(BackendError::new(
                 ErrorKind::Io,
-                format!("{} is in use by {}.", part.node.display(), holders.join(", ")),
+                format!(
+                    "{} is in use by {}.",
+                    part.node.display(),
+                    holders.join(", ")
+                ),
             ));
         }
         Ok(())

@@ -16,8 +16,10 @@ pub fn menu() -> Tree {
         })
         .leaf("Hardware", show_hardware)
         .leaf("Storage", show_storage);
-    t.leaf("Network details", show_network)
-        .leaf("Save system report", save_report)
+    t.leaf("Network details", show_network).leaf(
+        "Save system report",
+        crate::ui::access::gate("save system report", save_report),
+    )
 }
 
 pub fn show_hardware(s: &mut Ui) {

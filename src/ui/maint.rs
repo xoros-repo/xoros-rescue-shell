@@ -16,7 +16,7 @@ const JOB_DIALOG: &str = "maint_job_progress";
 /// BAK-6: choose overlay/application, then e2fsck -y + mount test (behind the PIN).
 pub fn repair_start(s: &mut Ui) {
     pop_to_base(s);
-    crate::ui::pin::require(s, "repair file system", |s| {
+    crate::ui::access::require(s, "repair file system", |s| {
         let items = [PartRole::Overlay, PartRole::Application]
             .iter()
             .map(|r| (r.label().to_string(), *r))

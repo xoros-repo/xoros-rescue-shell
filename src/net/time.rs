@@ -115,7 +115,11 @@ impl SyncReport {
             self.offset,
             format_utc(self.new_time),
             if self.changed { "" } else { " (unchanged)" }
-        ) + &self.rtc_note.as_ref().map(|n| format!(" {n}")).unwrap_or_default()
+        ) + &self
+            .rtc_note
+            .as_ref()
+            .map(|n| format!(" {n}"))
+            .unwrap_or_default()
     }
 }
 
@@ -127,14 +131,21 @@ fn server_addrs(env: &NetEnv, server: &str) -> Result<Vec<SocketAddr>, String> {
     };
     let ips = dns::resolve(host, &dns_servers(env), Duration::from_secs(3))
         .map_err(|e| format!("{host}: {e}"))?;
-    Ok(ips.into_iter().map(|ip| SocketAddr::new(ip, port)).collect())
+    Ok(ips
+        .into_iter()
+        .map(|ip| SocketAddr::new(ip, port))
+        .collect())
 }
 
 /// NET-7: query the servers in order (default: `ntp_servers` of the settings, CFG-1) and set
 /// the clock from the first answer.
 pub fn sync(env: &NetEnv, servers: &[String]) -> Result<SyncReport, String> {
     let default = crate::settings::current().ntp_servers();
-    let servers = if servers.is_empty() { &default } else { servers };
+    let servers = if servers.is_empty() {
+        &default
+    } else {
+        servers
+    };
     let mut errors = Vec::new();
     for server in servers {
         let addrs = match server_addrs(env, server) {
@@ -159,7 +170,11 @@ pub fn sync(env: &NetEnv, servers: &[String]) -> Result<SyncReport, String> {
                         offset: r.offset,
                         new_time,
                         changed,
-                        rtc_note: crate::rtc::store(env.simulation, Path::new(RTC_DEVICE), new_time),
+                        rtc_note: crate::rtc::store(
+                            env.simulation,
+                            Path::new(RTC_DEVICE),
+                            new_time,
+                        ),
                     });
                 }
                 Err(e) => errors.push(format!("{server} ({addr}): {e}")),

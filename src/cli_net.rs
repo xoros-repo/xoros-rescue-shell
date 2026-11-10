@@ -164,7 +164,11 @@ pub const STORE_WPA3_FLAG: &str = "--store-wpa3-password";
 
 fn remember_now(app: &App, env: &NetEnv, args: &[String]) -> Result<String, String> {
     let state = profile::load_state(env);
-    let r = profile::remember_with(app.backend.as_ref(), &state, has_flag(args, STORE_WPA3_FLAG))?;
+    let r = profile::remember_with(
+        app.backend.as_ref(),
+        &state,
+        has_flag(args, STORE_WPA3_FLAG),
+    )?;
     Ok(format!(
         "{} connection(s): {}",
         state.connections.len(),
@@ -197,7 +201,14 @@ pub fn net_cmd(app: &App, args: &[String]) -> Option<Result<String, String>> {
         "show" => (&[], &["--json"], false),
         "scan" | "export-nm" => (&[], &[], true),
         "config" => (
-            &["--gateway", "--dns", "--wifi", "--security", "--psk", "--country"],
+            &[
+                "--gateway",
+                "--dns",
+                "--wifi",
+                "--security",
+                "--psk",
+                "--country",
+            ],
             &["--hidden", "--no-apply", "--remember", S],
             true,
         ),
@@ -529,7 +540,10 @@ mod tests {
             "--remember",
         ])
         .unwrap();
-        assert!(out.contains("1 connection(s): Remembered in overlay:/rescue/network.json"), "{out}");
+        assert!(
+            out.contains("1 connection(s): Remembered in overlay:/rescue/network.json"),
+            "{out}"
+        );
         assert!(run(&["list"])
             .unwrap()
             .contains("eth0: ethernet, static 10.0.2.50/24"));

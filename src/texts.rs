@@ -145,13 +145,35 @@ so they survive slot updates. Lists: separated by spaces.";
 pub const SETTINGS_READ_ONLY: &str = "The overlay partition is not available: these are the \
 built-in defaults and cannot be saved.";
 
-pub const PIN_INFO: &str = "The PIN is asked before destructive actions (writing slots, \
-importing backups, factory reset, re-creating file systems), the settings and the subshell. \
-4 to 12 digits.";
+pub const PIN_INFO: &str = "Old PIN (rescue shell M4): it protects the admin functions only \
+until an admin password is set (Tools -> Admin password), which also protects the boot menu. \
+Setting an admin password removes the PIN.";
 
-pub const PIN_PROMPT: &str = "Enter the PIN:";
+// --- Access protection (SEC-*) ---
 
-pub const PIN_LOCKED: &str = "Too many wrong PINs. Wait a minute and try again.";
+pub const TITLE_ADMIN: &str = "Admin";
+
+pub const MENU_MODE_EXPLANATION: &str = "Whether GRUB shows its boot menu. The automatic choice \
+(slot A/B, rescue after failed boots) is the same in every mode. With an admin password set, the \
+menu entries boot without it; editing them needs it.";
+pub const TITLE_ADMIN_PASSWORD: &str = "Admin password";
+
+pub const ADMIN_PROMPT: &str = "This function needs the admin password (the same as for the \
+GRUB boot menu, user 'admin'). Without it only the information screens, tests that do not write, \
+reboot and power off are available.";
+
+pub const ADMIN_OFF_INFO: &str = "No admin password is set: all functions are available. Set \
+one in Tools -> Admin password to protect the rescue shell and the GRUB boot menu.";
+
+pub const ADMIN_PASSWORD_INFO: &str = "One password protects the GRUB boot menu (editing entries \
+and the GRUB command line, user 'admin') and the admin functions of the rescue shell. It is \
+stored as a PBKDF2 hash on the boot partition (EFI/BOOT/admin.cfg). 8 to 64 printable ASCII \
+characters; GRUB reads the keyboard with the US layout, so avoid characters that are on other \
+keys in your layout (e.g. y/z, symbols).";
+
+pub const ADMIN_REMOVE_CONFIRM: &str = "Remove the device admin password? If the rescue image \
+has a build default password, it applies again; otherwise the boot menu and the rescue shell are \
+no longer protected.";
 
 pub const MKFS_EXPLANATION: &str = "Runs e2fsck -y on the partition and tries to mount it. If \
 it still cannot be mounted, the file system can be re-created (this ERASES everything on the \

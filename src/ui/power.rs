@@ -12,11 +12,20 @@ use crate::ui::{app, dialogs};
 pub fn menu() -> Tree {
     Tree::new()
         .leaf("Reboot", |s| ask(s, PowerPlan::reboot()))
-        .leaf("Reboot into slot A", |s| ask_slot(s, Slot::A))
-        .leaf("Reboot into slot B", |s| ask_slot(s, Slot::B))
-        .leaf("Reboot into rescue", |s| {
-            ask(s, PowerPlan::reboot_into(BootTarget::Rescue, false))
-        })
+        .leaf(
+            "Reboot into slot A",
+            crate::ui::access::gate("reboot into slot A", |s| ask_slot(s, Slot::A)),
+        )
+        .leaf(
+            "Reboot into slot B",
+            crate::ui::access::gate("reboot into slot B", |s| ask_slot(s, Slot::B)),
+        )
+        .leaf(
+            "Reboot into rescue",
+            crate::ui::access::gate("reboot into rescue", |s| {
+                ask(s, PowerPlan::reboot_into(BootTarget::Rescue, false))
+            }),
+        )
         .delimiter()
         .leaf("Power off", |s| ask(s, PowerPlan::power_off()))
         .delimiter()

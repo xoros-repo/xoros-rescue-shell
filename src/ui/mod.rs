@@ -1,6 +1,7 @@
 //! Screens and dialogs, one module per menu (UI-*), on the widget layer [`tk`] (ratatui). The
 //! only place that uses ratatui.
 
+pub mod access;
 pub mod backup;
 pub mod boot;
 pub mod dialogs;
@@ -8,16 +9,15 @@ pub mod jobs;
 pub mod maint;
 pub mod network;
 pub mod power;
-pub mod pin;
 pub mod progress;
 pub mod settings;
 pub mod status;
 pub mod tests;
 pub mod theme;
-#[cfg(test)]
-mod tui_tests;
 pub mod tk;
 pub mod tools;
+#[cfg(test)]
+mod tui_tests;
 pub mod update;
 
 use std::sync::{Arc, Mutex};
@@ -60,6 +60,9 @@ pub fn show_screen<V: View>(s: &mut Ui, view: V) {
 
 fn status_line_text(app: &App, width: usize) -> String {
     let mut parts = Vec::new();
+    if let Some(tag) = access::status_tag() {
+        parts.push(tag.to_string());
+    }
     if app.backend.is_simulation() {
         parts.push(format!("[{}]", texts::SIMULATION_NOTE));
     }
@@ -137,6 +140,16 @@ static TICK_SEEN: Mutex<(usize, u64)> = Mutex::new((BASE_LAYERS, 0));
 /// dialog/screen was closed or when a task finished while it is visible. Actions change the
 /// state (update, boot settings, reset, tests), so the screen is never left stale.
 fn on_tick(s: &mut Ui) {
+    // SEC-2: lock the admin session after the idle timeout.
+    let idle = Duration::from_secs(crate::settings::current().admin_idle_timeout);
+    if crate::access::check_idle(idle) {
+        pop_to_base(s);
+        dialogs::info(
+            s,
+            texts::TITLE_ADMIN,
+            "The admin session was locked (no input).",
+        );
+    }
     update_status_line(s);
     let Some(app) = app(s) else { return };
     let layers = s.screen_len();
@@ -175,6 +188,8 @@ fn build(app: Arc<App>) -> Ui {
     build_menubar(&mut siv);
     siv.add_fullscreen_layer(base_layer());
 
+    // SEC-2: every key press counts as activity for the idle timeout.
+    siv.set_on_input(crate::access::touch);
     // A click on the menu bar opens it with menus built like for Esc.
     siv.set_menu_builder(build_menubar);
     // UI-2: Esc opens the menu; Ctrl-C does not exit.

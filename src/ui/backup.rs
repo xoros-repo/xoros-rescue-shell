@@ -30,20 +30,29 @@ const RESET_RESCUE_BOX: &str = "reset_rescue_settings";
 
 pub fn menu() -> Tree {
     Tree::new()
-        .leaf("Export to stick", export_start)
+        .leaf(
+            "Export to stick",
+            crate::ui::access::gate("backup export", export_start),
+        )
         .leaf("Import from stick", |s| {
-            crate::ui::pin::require(s, "backup import", import_start)
+            crate::ui::access::require(s, "backup import", import_start)
         })
         .delimiter()
         .leaf("Reset configuration", |s| {
-            crate::ui::pin::require(s, "configuration reset", |s| reset_start(s, false))
+            crate::ui::access::require(s, "configuration reset", |s| reset_start(s, false))
         })
         .leaf("Full factory reset", |s| {
-            crate::ui::pin::require(s, "full factory reset", |s| reset_start(s, true))
+            crate::ui::access::require(s, "full factory reset", |s| reset_start(s, true))
         })
         .delimiter()
-        .leaf("Repair file system...", crate::ui::maint::repair_start)
-        .leaf("Raw partition image...", crate::ui::maint::image_start)
+        .leaf(
+            "Repair file system...",
+            crate::ui::access::gate("repair file system", crate::ui::maint::repair_start),
+        )
+        .leaf(
+            "Raw partition image...",
+            crate::ui::access::gate("raw partition image", crate::ui::maint::image_start),
+        )
         .leaf("Safely remove stick", crate::ui::maint::safe_remove_start)
 }
 
@@ -107,13 +116,8 @@ fn write_busy(s: &mut Ui, app: &App) -> bool {
 
 /// Run a backup job in the background; when it ends the progress dialog closes and `on_ok`
 /// shows the result, a failure shows `fail_title` with the full reason (UI-5, BAK-4a).
-fn run_job<T, B, K>(
-    s: &mut Ui,
-    title: &'static str,
-    fail_title: &'static str,
-    body: B,
-    on_ok: K,
-) where
+fn run_job<T, B, K>(s: &mut Ui, title: &'static str, fail_title: &'static str, body: B, on_ok: K)
+where
     T: Send + 'static,
     B: FnOnce(&App, &TaskCtx) -> Result<T, TaskFailure> + Send + 'static,
     K: FnOnce(&mut Ui, T) + Send + 'static,

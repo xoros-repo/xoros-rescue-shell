@@ -948,7 +948,9 @@ mod tests {
         let e = env(&d);
         let lines = startup(&e, &b);
         assert!(
-            lines.iter().any(|l| l.contains("WPA3 password was not remembered")),
+            lines
+                .iter()
+                .any(|l| l.contains("WPA3 password was not remembered")),
             "{lines:?}"
         );
         assert!(!e.run_dir.join("wpa_supplicant-wlan0.conf").exists());
@@ -962,7 +964,10 @@ mod tests {
         assert!(r.text().contains("clear text"));
         assert!(fs::read_to_string(&file).unwrap().contains("sae-secret"));
         use std::os::unix::fs::PermissionsExt;
-        assert_eq!(fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
         startup(&e, &b);
         let conf = fs::read_to_string(e.run_dir.join("wpa_supplicant-wlan0.conf")).unwrap();
         assert!(conf.contains("sae_password=\"sae-secret\""));

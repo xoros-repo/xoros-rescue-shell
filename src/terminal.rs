@@ -16,7 +16,8 @@ static MAIN_THREAD: OnceLock<ThreadId> = OnceLock::new();
 /// repaints everything after a subshell.
 const LEAVE_TUI: &str =
     "\x1b[?1006l\x1b[?1015l\x1b[?1003l\x1b[?1002l\x1b[?1000l\x1b[0m\x1b[?25h\x1b[?1049l";
-const ENTER_TUI: &str = "\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1015h\x1b[?1006h";
+const ENTER_TUI: &str =
+    "\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1015h\x1b[?1006h";
 
 fn get_termios() -> Option<libc::termios> {
     // SAFETY: termios is a plain C struct; tcgetattr fills it for a valid fd.
@@ -151,7 +152,10 @@ fn push_back_input(bytes: &[u8]) {
             return;
         }
     }
-    log::info!("subshell: passed {} typed key byte(s) on to the shell", bytes.len());
+    log::info!(
+        "subshell: passed {} typed key byte(s) on to the shell",
+        bytes.len()
+    );
 }
 
 /// Run an interactive login shell on the terminal (SH-1). The caller (UI) must redraw

@@ -103,6 +103,12 @@ pub fn status_text(st: &SystemStatus) -> String {
         .map(|t| t.name().to_string())
         .unwrap_or_else(|| "unknown".into());
     let _ = writeln!(out, "Running: {cur}   Next boot (predicted): {next}");
+    // SEC-*: what protects the admin functions (and whether the boot menu is protected).
+    let _ = writeln!(
+        out,
+        "Admin password: {}",
+        ellipsize(&crate::access::protection().describe(), 62)
+    );
     if let Some(e) = &st.boot_error {
         if !st.grubenv_broken {
             let _ = writeln!(out, "  Boot state: {}", ellipsize(e, 62));

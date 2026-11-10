@@ -1,11 +1,11 @@
 //! Common dialogs: info, error (UI-5), confirm (UI-4), choice lists, text screens.
 //! All sized to fit 80x24 (RT-4); `q` and `Esc` close them (UI-2).
 
-use crate::ui::tk::Key;
 use crate::ui::tk::traits::*;
 use crate::ui::tk::views::{
     Dialog, EditView, LinearLayout, OnEventView, ScrollView, SelectView, TextView,
 };
+use crate::ui::tk::Key;
 use crate::ui::tk::Ui;
 
 use crate::texts;

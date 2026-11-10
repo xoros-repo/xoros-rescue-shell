@@ -107,10 +107,7 @@ mod tests {
             url_host_port("http://u:p@mirror:8080/x"),
             Some(("mirror".into(), 8080))
         );
-        assert_eq!(
-            url_host_port("http://[::1]:81/"),
-            Some(("::1".into(), 81))
-        );
+        assert_eq!(url_host_port("http://[::1]:81/"), Some(("::1".into(), 81)));
         assert_eq!(url_host_port("nope"), None);
     }
 
@@ -122,7 +119,12 @@ mod tests {
             r.resolve("127.0.0.1", 80).unwrap(),
             vec!["127.0.0.1:80".parse::<SocketAddr>().unwrap()]
         );
-        assert_eq!(resolve_host("localhost", 1, &["192.0.2.1".parse().unwrap()]).unwrap().len(), 1);
+        assert_eq!(
+            resolve_host("localhost", 1, &["192.0.2.1".parse().unwrap()])
+                .unwrap()
+                .len(),
+            1
+        );
         let mut o = http_options(Some("  ".into()), vec![]);
         assert_eq!(o.proxy, None);
         o.connect_timeout = Duration::from_secs(2);
@@ -131,7 +133,9 @@ mod tests {
             c.get("http://127.0.0.1:9/x"),
             Err(xoros_core::Error::Network(_))
         ));
-        assert!(xoros_core::http::HttpClient::new(&http_options(Some("ftp://p:1".into()), vec![]))
-            .is_err());
+        assert!(
+            xoros_core::http::HttpClient::new(&http_options(Some("ftp://p:1".into()), vec![]))
+                .is_err()
+        );
     }
 }

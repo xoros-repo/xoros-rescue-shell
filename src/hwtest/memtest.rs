@@ -619,7 +619,9 @@ mod tests {
         }];
         resolve_physical(&d.path().join("pagemap"), 4096, &mut errs);
         assert_eq!(errs[0].physical, Some(0x42 * 4096 + 8));
-        assert!(errs[0].line().starts_with("x: physical 0x0000042008, virtual"));
+        assert!(errs[0]
+            .line()
+            .starts_with("x: physical 0x0000042008, virtual"));
     }
 
     #[test]

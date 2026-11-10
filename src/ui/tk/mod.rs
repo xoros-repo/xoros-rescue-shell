@@ -173,6 +173,7 @@ pub struct Ui {
     global: Vec<(Event, Callback)>,
     pre: Vec<(Event, Callback)>,
     menu_builder: Option<Callback>,
+    on_input: Option<fn()>,
     tx: CbSink,
     rx: mpsc::Receiver<UiTask>,
     size: Vec2,
@@ -191,6 +192,7 @@ impl Ui {
             global: Vec::new(),
             pre: Vec::new(),
             menu_builder: None,
+            on_input: None,
             tx,
             rx,
             size: Vec2::new(80, 24),
@@ -286,6 +288,11 @@ impl Ui {
     }
 
     /// A layer that fills the screen below the menu bar.
+    /// `f` runs for every key, paste and mouse event read from the terminal (user activity).
+    pub fn set_on_input(&mut self, f: fn()) {
+        self.on_input = Some(f);
+    }
+
     pub fn add_fullscreen_layer<V: View>(&mut self, view: V) {
         self.push_layer(Box::new(view), true);
     }
@@ -396,7 +403,13 @@ impl Ui {
                 dirty = false;
             }
             if poll(Duration::from_millis(50))? {
-                match read()? {
+                let ev = read()?;
+                if let (Some(f), CtEvent::Key(_) | CtEvent::Paste(_) | CtEvent::Mouse(_)) =
+                    (self.on_input, &ev)
+                {
+                    f();
+                }
+                match ev {
                     CtEvent::Key(k) if k.kind != KeyEventKind::Release => {
                         self.on_event(Event::from_key(&k));
                         dirty = true;

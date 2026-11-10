@@ -130,7 +130,12 @@ impl App {
                     && (r.target.contains(&p.label) || r.details.contains(&p.label))
             });
             if let Some(r) = last {
-                p.fsck = Some(format!("{}: {} ({} UTC)", r.kind.title(), r.outcome, r.started));
+                p.fsck = Some(format!(
+                    "{}: {} ({} UTC)",
+                    r.kind.title(),
+                    r.outcome,
+                    r.started
+                ));
             }
         }
         st

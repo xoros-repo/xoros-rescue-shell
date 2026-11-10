@@ -63,6 +63,7 @@ pub const GRUBENV_KNOWN_VARS: &[&str] = &[
     core::VAR_NEXT_BOOT,
     core::VAR_LAST_BOOT,
     core::VAR_ROTATION,
+    core::VAR_MENU_MODE,
 ];
 
 /// Persistent partition roles shown on the status screen.

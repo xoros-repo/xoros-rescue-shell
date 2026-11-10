@@ -35,11 +35,17 @@ pub fn menu() -> Tree {
             run_test(s, TestRequest::Rescue);
         })
         .leaf("Memory test...", memory_start)
-        .leaf("Reboot into memtest86+...", memtest86_start)
+        .leaf(
+            "Reboot into memtest86+...",
+            crate::ui::access::gate("reboot into memtest86+", memtest86_start),
+        )
         .leaf("Disk read test...", disk_start)
         .leaf("File system check...", fsck_start)
         .leaf("Disk health...", health_start)
-        .leaf("Stick write test (destructive)...", stick_start)
+        .leaf(
+            "Stick write test (destructive)...",
+            crate::ui::access::gate("stick write test", stick_start),
+        )
         .leaf("CPU stress test...", stress_start)
         .delimiter()
         .leaf(texts::TITLE_TEST_RESULTS, show_results)
@@ -295,7 +301,7 @@ fn fsck_start(s: &mut Ui) {
 
 /// CFG-2: the repair asks for the PIN first.
 fn fsck_repair_confirm(s: &mut Ui, roles: Vec<PartRole>) {
-    crate::ui::pin::require(s, "repair file system", move |s| {
+    crate::ui::access::require(s, "repair file system", move |s| {
         fsck_repair_dialog(s, roles.clone())
     });
 }
@@ -402,7 +408,11 @@ fn stick_start(s: &mut Ui) {
     pop_to_base(s);
     let disks = match candidates(a.backend.as_ref()) {
         Ok(d) if d.is_empty() => {
-            dialogs::info(s, texts::TITLE_STICKTEST, "No stick found (the boot disk is never offered).");
+            dialogs::info(
+                s,
+                texts::TITLE_STICKTEST,
+                "No stick found (the boot disk is never offered).",
+            );
             return;
         }
         Ok(d) => d,
@@ -423,7 +433,7 @@ fn stick_start(s: &mut Ui) {
 
 /// CFG-2: the destructive stick test asks for the PIN first.
 fn stick_confirm(s: &mut Ui, d: crate::backend::BlockDevice) {
-    crate::ui::pin::require(s, "stick write test", move |s| stick_dialog(s, d.clone()));
+    crate::ui::access::require(s, "stick write test", move |s| stick_dialog(s, d.clone()));
 }
 
 fn stick_dialog(s: &mut Ui, d: crate::backend::BlockDevice) {
@@ -454,15 +464,21 @@ fn stick_dialog(s: &mut Ui, d: crate::backend::BlockDevice) {
         format_bytes(d.size)
     );
     let disk = d.name.clone();
-    dialogs::confirm_typed(s, texts::TITLE_STICKTEST, &text, CONFIRM_WORD, move |s, typed| {
-        run_test(
-            s,
-            TestRequest::Stick(StickTestRequest {
-                disk: disk.clone(),
-                confirmation: typed,
-            }),
-        )
-    });
+    dialogs::confirm_typed(
+        s,
+        texts::TITLE_STICKTEST,
+        &text,
+        CONFIRM_WORD,
+        move |s, typed| {
+            run_test(
+                s,
+                TestRequest::Stick(StickTestRequest {
+                    disk: disk.clone(),
+                    confirmation: typed,
+                }),
+            )
+        },
+    );
 }
 
 // --- TST-9 ---
@@ -475,12 +491,17 @@ fn stress_start(s: &mut Ui) {
     let layout = LinearLayout::vertical()
         .child(TextView::new(texts::STRESS_INTRO).max_width(MAX_W))
         .child(TextView::new(" "))
-        .child(number_field("Minutes (1..120)", STRESS_MINUTES, stress::DEFAULT_MINUTES));
+        .child(number_field(
+            "Minutes (1..120)",
+            STRESS_MINUTES,
+            stress::DEFAULT_MINUTES,
+        ));
     s.add_layer(closable(
         Dialog::around(layout)
             .title(texts::TITLE_STRESS)
             .button(texts::BTN_START, |s| {
-                let Some(m) = read_number(s, STRESS_MINUTES).filter(|m| stress::MINUTES_RANGE.contains(m))
+                let Some(m) =
+                    read_number(s, STRESS_MINUTES).filter(|m| stress::MINUTES_RANGE.contains(m))
                 else {
                     dialogs::info(s, texts::TITLE_STRESS, "Enter 1..120 minutes.");
                     return;

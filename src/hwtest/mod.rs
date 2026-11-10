@@ -489,7 +489,9 @@ pub fn run_request(env: &TestEnv, req: &TestRequest, ctx: &TaskCtx) -> TestResul
             } else {
                 disks.join(" + ")
             };
-            run_recorded(store, kind, &target, ctx, |ctx| health::run(backend, disks, ctx))
+            run_recorded(store, kind, &target, ctx, |ctx| {
+                health::run(backend, disks, ctx)
+            })
         }
         TestRequest::Stick(r) => run_recorded(store, kind, &r.disk, ctx, |ctx| {
             sticktest::run(backend, r, ctx)

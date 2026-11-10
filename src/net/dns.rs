@@ -265,12 +265,14 @@ mod tests {
         r[2] = 0x81;
         r[3] = 0x80 | rcode;
         r[7] = 3; // ANCOUNT
-        // CNAME ota.xoros.io -> cdn.xoros.io
+                  // CNAME ota.xoros.io -> cdn.xoros.io
         r.extend_from_slice(&[0xC0, 12, 0, 5, 0, 1, 0, 0, 0, 60, 0, 6]);
         r.extend_from_slice(b"\x03cdn\xC0\x10");
         // A cdn -> 203.0.113.7 (name: pointer to the CNAME data)
         let cdn = 12 + 18 + 12;
-        r.extend_from_slice(&[0xC0, cdn as u8, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 203, 0, 113, 7]);
+        r.extend_from_slice(&[
+            0xC0, cdn as u8, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 203, 0, 113, 7,
+        ]);
         r.extend_from_slice(&[0xC0, cdn as u8, 0, 28, 0, 1, 0, 0, 0, 60, 0, 16]);
         r.extend_from_slice(&[0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
         r

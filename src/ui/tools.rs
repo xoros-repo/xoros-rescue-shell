@@ -27,12 +27,27 @@ pub fn menu() -> Tree {
     let t = Tree::new()
         .subtree("Logs", logs)
         .leaf(texts::TITLE_TASKS, show_tasks);
-    t.leaf("Diagnostics bundle", diagnostics_bundle)
-        .leaf("Subshell", subshell)
-        .leaf("Remote access (SSH)", remote_access)
-        .leaf(texts::TITLE_SETTINGS, crate::ui::settings::show)
-        .delimiter()
-        .leaf(texts::TITLE_ABOUT, about)
+    t.leaf(
+        "Diagnostics bundle",
+        crate::ui::access::gate("diagnostics bundle", diagnostics_bundle),
+    )
+    .leaf("Subshell", subshell)
+    .leaf(
+        "Remote access (SSH)",
+        crate::ui::access::gate("remote access", remote_access),
+    )
+    .leaf(texts::TITLE_SETTINGS, crate::ui::settings::show)
+    .delimiter()
+    .leaf(
+        crate::ui::access::toggle_label(),
+        crate::ui::access::toggle_session,
+    )
+    .leaf(
+        texts::TITLE_ADMIN_PASSWORD,
+        crate::ui::access::password_menu,
+    )
+    .delimiter()
+    .leaf(texts::TITLE_ABOUT, about)
 }
 
 fn show_log(s: &mut Ui, src: LogSource) {
@@ -136,7 +151,7 @@ fn show_tasks(s: &mut Ui) {
 
 fn subshell(s: &mut Ui) {
     dialogs::confirm(s, "Subshell", texts::SUBSHELL_INFO, "Start", |s| {
-        crate::ui::pin::require(s, "subshell", start_subshell);
+        crate::ui::access::require(s, "subshell", start_subshell);
     });
 }
 
@@ -144,7 +159,14 @@ fn start_subshell(s: &mut Ui) {
     let Some(app) = app(s) else { return };
     // The shell runs on the UI thread: no events are read meanwhile.
     let r = crate::terminal::run_subshell(&app.backend.run_dir());
+    // SEC-2: time in the subshell does not count as idle.
+    crate::access::touch();
+    // The CLI in the subshell may have changed the settings or the admin password (another
+    // process): use them now, not only after a restart.
+    crate::settings::install(crate::settings::load(app.backend.as_ref()));
+    crate::access::reload(app.backend.as_ref());
     s.clear();
+    crate::ui::refresh_status(s);
     if let Err(e) = r {
         dialogs::error(s, "Cannot start the subshell.", &e);
     }
