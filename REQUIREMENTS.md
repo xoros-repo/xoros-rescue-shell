@@ -1,6 +1,6 @@
 # XorOS Rescue Shell: Technical Implementation Requirements
 
-Status: draft 2 (2026-10-27). Target app: `xoros-rescue-shell` from github.com/xoros-repo/xoros-rescue-shell.
+Status: draft 3 (2026-11-10; draft 2: 2026-10-27). Target app: `xoros-rescue-shell` from github.com/xoros-repo/xoros-rescue-shell.
 Related: `../xor/REQUIREMENTS.md` (shared crate `xoros-core` and the `xor` tool, see [section 9.1](#91-shared-crate-xoros-core)).
 
 This document contains everything needed to implement the rescue shell without access to the `xoros-distro`
@@ -20,7 +20,9 @@ XorOS is an embedded Linux distribution (Yocto) for kiosk/appliance devices (Ras
 Every device has three bootable systems on one drive: two root filesystem slots (A/B) and a rescue system. The rescue
 system boots when both slots fail or when a user picks it in the boot menu. The rescue shell is the program a person
 sees on the screen in the rescue system. It must let a technician with a keyboard (and optionally a USB stick and a
-network) bring the device back to a working state without another computer.
+network) bring the device back to a working state without another computer. When an admin password is set
+([section 4.7](#47-access-protection-admin-password)), only a technician who knows it can change anything; anybody
+else at the console can only look and reboot.
 
 In scope: everything in [section 6](#6-functional-requirements).
 Out of scope: changing the partition layout, updating the bootloader/boot partition (planned later, see `BOOT-*`
@@ -87,12 +89,16 @@ Consequences the app MUST handle:
 
 1. Sets defaults: `ORDER="ROOTFS_A ROOTFS_B"`, `ROOTFS_A_TRY=0`, `ROOTFS_B_TRY=0`, `ROTATION=0`, `MAX_TRIES=3`,
    `NEXT_BOOT=""`.
-2. `load_env`: every variable in grubenv overrides the defaults above (so `ORDER`, `MAX_TRIES` and `ROTATION` can be
-   changed by writing them to grubenv).
+2. `load_env` with an explicit variable list (`BOOT-8`): only the variables of the table below override the defaults
+   (so `ORDER`, `MAX_TRIES` and `ROTATION` can be changed by writing them to grubenv). Today `load_env` still loads
+   every variable (`DIST-11`).
 3. If `NEXT_BOOT` is set (`MENU_ROOTFS_A`, `MENU_ROOTFS_B` or `MENU_RESCUE`), boots that entry once and clears it
    (`save_env NEXT_BOOT` with an empty value).
 4. Otherwise picks the first slot in `ORDER` whose `<SLOT>_TRY` is lower than `MAX_TRIES`; if none, picks `Rescue`.
-5. The menu is shown for 3 seconds (`timeout=3`), entries: `RootFS Slot A (TRY=n)`, `RootFS Slot B (TRY=n)`, `Rescue`.
+5. The menu is shown for 3 seconds (`timeout=3`), entries: `RootFS Slot A (TRY=n)`, `RootFS Slot B (TRY=n)`, `Rescue`
+   (x86 also `memtest86+`, `DIST-6`). With `MENU_MODE` (`BOOT-9`, `DIST-11`) the menu is hidden unless enabled.
+   When an admin password exists (4.7) every entry still boots without a password (`--unrestricted`), but editing an
+   entry (`e`) and the GRUB command line (`c`) require it.
 6. Booting a slot increments `<SLOT>_TRY` (values 0..20 are supported, larger values stop incrementing) and saves
    `<SLOT>_TRY` and `LAST_BOOT=<SLOT>`. Booting rescue saves `LAST_BOOT=RESCUE`.
 7. Kernel command line includes `boot.slot=ROOTFS_A|ROOTFS_B|RESCUE`, `root=PARTLABEL=<label>`,
@@ -115,8 +121,20 @@ grubenv variables the app reads and writes:
 | `NEXT_BOOT` | `""`, `MENU_ROOTFS_A`, `MENU_ROOTFS_B`, `MENU_RESCUE` | One-shot boot target | read, write |
 | `LAST_BOOT` | `ROOTFS_A`, `ROOTFS_B`, `RESCUE` | Last entry GRUB booted | read only |
 | `ROTATION` | `0`..`3` | Console rotation (fbcon) | read, write |
+| `MENU_MODE` | `""`, `shown`, `hidden`, `once` | Boot menu visibility (`BOOT-9`); `""` = build default | read, write (admin) |
 
 Unknown variables MUST be preserved when writing.
+
+- **BOOT-8 (P2)** grub.cfg loads only the variables of the table above (`load_env ORDER ROOTFS_A_TRY ROOTFS_B_TRY
+  MAX_TRIES NEXT_BOOT LAST_BOOT ROTATION MENU_MODE`) and validates the values it uses in commands, as it does for
+  `ROTATION` today. A variable in grubenv MUST NOT be able to change `superusers`, the passwords, `CMDLINE` or the
+  menu entries.
+- **BOOT-9 (P2)** `MENU_MODE`: `shown` = menu with the 3 s timeout (today's behaviour); `hidden` =
+  `timeout_style=hidden`, the default entry boots without showing the menu; `once` = shown on the next boot only, then
+  GRUB saves `MENU_MODE=hidden`. Empty or unknown = the build default `XOROS_BOOT_MENU` (`shown` until the boot chain
+  is proven, `hidden` later). The automatic choice of the default entry (A/B/rescue fallback, step 4) is the same in
+  all modes. Only an admin session (`SEC-2`) or root in the normal system (`xor boot menu`) changes it. Further
+  conditions that show the menu MAY be added later; they MUST NOT need a password.
 
 ### 4.3 grubenv file format and writing rules
 
@@ -175,6 +193,49 @@ The normal system uses **NetworkManager** (keyfile plugin, connections in `/etc/
 `nmcli` available). Interface names are `eth0`, `wlan0` (`net.ifnames=0`). Network settings copied for the normal
 system are therefore NetworkManager keyfiles written into the overlay upper dir (`NET-8`).
 
+### 4.7 Access protection (admin password)
+
+Goal: a device MUST always boot without anybody typing anything (slot A/B/rescue fallback, 4.2), but a person with
+only local console access (keyboard, screen, serial port) MUST NOT be able to change the device or read its secrets
+without the admin password. Out of scope: an attacker who removes the drive, boots another medium (see `DIST-15`) or
+opens the case; that needs disk encryption or Secure Boot.
+
+One admin password, user name `admin`, protects both places a console user can reach:
+
+- **GRUB** (`DIST-11`): `superusers="admin"` plus `password_pbkdf2`. All boot entries are `--unrestricted` (they boot
+  automatically and from the menu without a password); editing entries and the GRUB command line need the password.
+  This closes kernel command line tricks such as `init=/bin/sh`.
+- **The rescue shell**: read-only screens are open, every change and every export of data needs an admin session
+  (`SEC-1`, `SEC-2`).
+
+Storage (one format, read by GRUB and by the rescue shell):
+
+- **Device password**: file `EFI/BOOT/admin.cfg` on the `boot` partition, exactly one line
+  `password_pbkdf2 admin grub.pbkdf2.sha512.<iterations>.<salt hex>.<hash hex>` (the format of
+  `grub-mkpasswd-pbkdf2`, PBKDF2-HMAC-SHA512) and a trailing newline, nothing else. grub.cfg runs it with `source`, the
+  rescue shell parses it (`XC-37` in `../xor/REQUIREMENTS.md`). Written only by an admin session (`SEC-4`) or by root
+  in the normal system (`xor admin`): write a temporary file in `EFI/BOOT/`, `fsync`, rename over `admin.cfg`, `sync`.
+- **Build default**: optional `XOROS_ADMIN_PASSWORD_HASH` (the `grub.pbkdf2.sha512...` string, never the clear text
+  password) set in the distro build (`DIST-12`). It is written into grub.cfg on the boot partition and into
+  `/etc/xoros/admin-password` (same one-line format) in the read-only rescue image.
+
+Which password applies (GRUB and the rescue shell MUST decide the same way):
+
+| `admin.cfg` | Build default | Result |
+|---|---|---|
+| valid | any | device password |
+| missing | set | build default |
+| missing | not set | protection off (today's behaviour) |
+| present but invalid | set | build default |
+| present but invalid | not set | locked: no password is accepted; GRUB menu entries still boot, the rescue shell offers only read-only screens and reboot; recovery needs the boot partition to be fixed from outside |
+
+In GRUB this is: `set superusers="admin"` when a build default exists or `admin.cfg` is present; register the
+build default with `password_pbkdf2` first, then `source admin.cfg` (a later `password_pbkdf2` for the same user
+replaces the earlier one, an invalid line registers nothing). So deleting `admin.cfg` falls back to the build default and never switches protection off when a build default
+exists. Known limitation: the boot partition is not updated by OTA (section 1), so after a rescue update with a new
+build default the GRUB copy and the rescue copy can differ until a device password is set; a device password
+(`admin.cfg`) is the same for both.
+
 ## 5. Rescue runtime environment
 
 - **RT-1** The app binary is `/usr/bin/xoros-rescue-shell`. It runs as root on `tty1` instead of the login prompt,
@@ -205,8 +266,8 @@ system are therefore NetworkManager keyfiles written into the overlay upper dir 
   `umount` / `fsck` / `agetty`, `e2fsprogs` (`e2fsck`, `mke2fs`, `badblocks`, `dumpe2fs`), `parted`, `hdparm`, `iw`,
   `wpa_supplicant` + `wpa_cli` + `wpa_passphrase`, `openssh` (`sshd`), `openssl`, `ca-certificates`
   (`/etc/ssl/certs/ca-certificates.crt`), `grub-editenv`, `kmod`, `strace`, `procps`, `lshw`, `rsync`, `nano`,
-  `python3`, `nodejs`, `git`. `dosfstools` is present on the Pi only. **Not** present: `lsblk`, `smartctl`,
-  `nvme`, `memtester`, `stress-ng`, `fio`, `curl` CLI (only `libcurl`), NetworkManager, the `xor` tool (the rescue shell links `xoros-core` instead, 9.1).
+  `python3`, `nodejs`, `git`, `dosfstools`, `smartctl` (smartmontools), `nvme` (nvme-cli). **Not** present: `lsblk`,
+  `memtester`, `stress-ng`, `fio`, `curl` CLI (only `libcurl`), NetworkManager, the `xor` tool (the rescue shell links `xoros-core` instead, 9.1).
 - **RT-6** The app SHOULD implement the logic natively in Rust, through `xoros-core` where it exists (block device
   I/O, hashing, HTTP, grubenv, sysfs parsing) and in the app otherwise (tar, network configuration), and call external tools only for mounting, `e2fsck`, `mke2fs`, `wpa_supplicant`, `udhcpc`/networkd and
   `systemctl`. Every external tool call MUST check that the tool exists and turn a missing tool into a visible
@@ -225,7 +286,7 @@ Update            from network (OTA-*), from USB stick (USB-*)
 Backup            export/import persistent partitions (BAK-*), factory reset (RST-*)
 Network           configure/test rescue network, copy to normal system (NET-*)
 Tests             memory, disk, slot integrity, file system check (TST-*)
-Tools             logs, diagnostics bundle, subshell, remote access (LOG-*, SH-*, SSH-*)
+Tools             logs, diagnostics bundle, subshell, remote access, unlock/lock, admin password (LOG-*, SH-*, SSH-*, SEC-*)
 Power             reboot, reboot into slot, power off (PWR-*)
 ```
 
@@ -454,7 +515,9 @@ Rescue side (runtime, nothing is written to the read-only rootfs):
   code), clock check (`NET-7`). P2: download speed test (download one OTA chunk to `/dev/null`).
 - **NET-5 (P2)** Remember the rescue network config for the next rescue boot in `overlay:/rescue/network.json`
   (only when the user chooses "remember"). Wi-Fi passphrases are stored as WPA PSK hex (`wpa_passphrase` output), not
-  in clear text. File mode `0600`.
+  in clear text. File mode `0600`. WPA3-SAE has no PSK hash: its password is only remembered when the user agrees to
+  store it in clear text (TUI question, CLI `--store-wpa3-password`); otherwise the network is remembered without
+  password and asked for again on the next rescue boot.
 
 Normal-system side:
 
@@ -539,11 +602,11 @@ include it in the diagnostics bundle (`LOG-2`).
 - **LOG-3 (P1)** The app writes its own log to `/run/xoros-rescue/rescue-shell.log` (and to the journal via stderr).
   Every destructive action is logged with parameters and result.
 - **SH-1 (P1)** Subshell: suspend the TUI, run `/bin/sh -l` as root on the same tty with prompt `rescue-shell# `,
-  restore the TUI on exit (existing feature, keep).
+  restore the TUI on exit (existing feature, keep). Admin only when protection is on (`SEC-1`).
 - **SSH-1 (P2)** Remote support: start `sshd` (installed, normally not running) on demand, with a one-time root
   password generated and shown on screen (set via `chpasswd` into a writable copy, or a dedicated `sshd_config` in
   `/run/xoros-rescue/` with `PasswordAuthentication yes` and an `AuthorizedKeysFile` the user can load from a stick).
-  Show the IP addresses. Stop on demand and when the app exits.
+  Show the IP addresses. Stop on demand and when the app exits. Admin only when protection is on (`SEC-1`).
 
 ### 6.10 Power (`PWR`)
 
@@ -565,11 +628,55 @@ include it in the diagnostics bundle (`LOG-2`).
   http_proxy = ""
   ntp_servers = ["pool.ntp.org", "time.cloudflare.com"]
   theme = "default"            # default, dark, mono, norton
+  admin_idle_timeout = 300     # seconds without a key press before an admin session locks (SEC-2)
   ```
 
   The app MUST work when the overlay partition is missing or broken (settings are then read-only defaults).
-- **CFG-2 (P3)** Optional access protection: a PIN (hash stored in the settings file) required before destructive
-  actions and the subshell. Off by default.
+- **CFG-2** Replaced by the admin password, [section 6.12](#612-access-protection-sec). The `pin_hash` setting from
+  M4 is only read for the migration in `SEC-6`.
+
+### 6.12 Access protection (`SEC`)
+
+Applies when an admin password is in effect (4.7). Without one the app behaves as if an admin session were always
+open.
+
+- **SEC-1 (P2)** Without an admin session the app allows only actions that read or that the boot chain does anyway:
+  - open: Status and all information screens (`SYS-1..4`), boot state view (`BOOT-1`), settings view, log viewer
+    (`LOG-1`), update check without writing (`OTA-1`), network status and test (`SYS-4`, `NET-4`), non-destructive
+    tests (`TST-1`, `TST-3`, `TST-4`, `TST-5`, `TST-6` check only, `TST-7`, `TST-9`), reboot and power off
+    (`PWR-1` plain reboot/power off);
+  - admin only: every write (grubenv incl. next boot, slot order, counters, rotation, `MENU_MODE`; slots, rescue,
+    persistent partitions, sticks; settings; network configuration and "remember"; `TST-6` repair, `TST-8`; factory
+    reset), every export of data to a stick (`BAK-*`, `SYS-5`, `LOG-2`, `BAK-7`), the subshell (`SH-1`), remote
+    access (`SSH-1`), "reboot into slot/rescue/memtest" (`PWR-1`, `TST-2`), and the password functions (`SEC-4`).
+  Admin-only menu entries stay visible and show the unlock dialog when chosen; after a successful unlock the chosen
+  action continues.
+- **SEC-2 (P2)** Admin session: unlock dialog (user name is fixed, masked password input). The session ends on
+  "Lock" (Tools menu), after `admin_idle_timeout` seconds without a key press (default 300, minimum 30), and when the app
+  restarts. The status bar always shows `LOCKED` or `ADMIN`. An operation started in a session runs to its end when
+  the session locks; its result is shown, further actions need a new unlock. Time spent in the subshell does not count
+  as idle; the session locks normally after returning.
+- **SEC-3 (P2)** Failed unlocks: 2 s delay after each failure; after 5 failures in a row the dialog is blocked for
+  60 s, doubling with each further failure up to 15 min (kept in memory, so a reboot resets it; GRUB has its own
+  handling). Every unlock, failure and lock is logged (`LOG-3`) without the entered text.
+- **SEC-4 (P2)** Admin password management (admin session, Tools menu):
+  - "Set/change admin password": new password twice; 8 to 64 printable ASCII characters (GRUB reads the keyboard with
+    the US layout, so the dialog says so and warns about characters that differ between layouts). Writes
+    `admin.cfg` (4.7) through `xoros-core` (`XC-37`, `BootPartition`).
+  - "Remove device password": deletes `admin.cfg` after confirmation; the dialog says what applies afterwards (build
+    default or no protection).
+  - Factory reset (`RST-*`) and backup import (`BAK-*`) do not touch `admin.cfg` (it is on the boot partition).
+- **SEC-5 (P2)** Password check through `xoros-core` (`XC-37`): the effective password is chosen exactly as in the 4.7
+  table. The check runs in a worker thread (PBKDF2 takes up to about a second on the Pi) with a "checking..." state.
+- **SEC-6 (P2)** Migration from the M4 PIN: while no admin password is in effect and `pin_hash` is set, the PIN is the
+  session password (same rules as `SEC-1..3`) and the Status screen says the boot menu is not protected. Setting an
+  admin password removes `pin_hash`. The CLI `settings set-pin` is removed; `clear-pin` stays for one release.
+- **SEC-7 (P2)** Boot menu visibility (`BOOT-9`): in the Boot menu, "Boot menu: shown / hidden / show once on next
+  boot" sets `MENU_MODE` (admin only).
+- **SEC-8 (P2)** CLI (`ARCH-2`): runs only as root, and root on the rescue system is reachable only through the
+  subshell or `SSH-1` (both admin only; root cannot log in, `RT-1`), so CLI commands do not ask for the password.
+  Commands: `--cli admin status` (off / build default / device password / locked / legacy PIN), `--cli admin
+  set-password` (password on stdin), `--cli admin clear-password`, `--cli boot menu <shown|hidden|once|default>`.
 
 ## 7. User interface requirements
 
@@ -603,8 +710,8 @@ include it in the diagnostics bundle (`LOG-2`).
 - **NF-3 (P1)** Static facts from section 4 (labels, paths, variable names, URLs) live in one constants module.
 - **NF-4 (P1)** Data safety: every write to the boot disk is preceded by checks (`DEV-1`, size, magic) and followed by
   `fsync` + verification. No write ever targets a whole-disk device, the `boot` or the `rescue` partition (except
-  grubenv updates per `ENV-2`). Implement this as a single guarded "open partition for write" function that every
-  writer uses.
+  grubenv updates per `ENV-2` and `admin.cfg` per `SEC-4`). Implement this as a single guarded "open partition for
+  write" function that every writer uses.
 - **NF-5 (P1)** Memory: works on 1 GiB RAM devices; downloads are streamed chunk by chunk (max one chunk in memory),
   tar archives streamed.
 - **NF-6 (P2)** Start-up time to the Status screen under 2 s; slow information (hashes, network checks) is filled in
@@ -723,6 +830,11 @@ The app MUST be developable on a normal Linux PC without a device and without th
   7. Memory test 1 pass and disk read test complete; results in the diagnostics bundle on a stick.
   8. Screen at 80x24 and at 100x30 with `ROTATION=1` is fully usable.
   9. Pull the network cable during an OTA download, reconnect, resume completes and verifies.
+  10. With an admin password (4.7): both counters at `MAX_TRIES` and the menu hidden, the device still boots slot B or
+      rescue without input; in GRUB, `e` and `c` ask for `admin` and the password; in the rescue shell, every
+      admin-only action of `SEC-1` asks for the password and the idle timeout locks the session; deleting `admin.cfg`
+      makes the build default apply, a corrupted `admin.cfg` too (GRUB and rescue shell agree); `MENU_MODE=once` shows
+      the menu exactly once.
 
 ## 12. Distro-side dependencies
 
@@ -731,16 +843,21 @@ described in the corresponding requirement.
 
 | ID | Change | Needed by | Without it |
 |---|---|---|---|
-| DIST-1 | Run `xor boot ok` (today `mark-boot-ok.sh`) automatically when the normal system has booted successfully: `xoros-boot-ok.service`, see `XD-3` in `../xor/REQUIREMENTS.md`. | `BOOT-*` | Counters grow on every normal boot; device falls into rescue after 6 boots. |
-| DIST-2 | Add `smartmontools` and `nvme-cli` to `xoros-rescue-image`. | `TST-7` | Only sysfs health info. |
-| DIST-3 | Make `/etc/resolv.conf` in the rescue image a symlink to `/run/xoros-rescue/resolv.conf` (or add `systemd-resolved`). | `NET-3` | Only the app resolves names; tools in the subshell do not. |
-| DIST-4 | Rescue kernel: `CONFIG_EXFAT_FS`, `CONFIG_VFAT_FS`, `CONFIG_NLS_CP437`, `CONFIG_NLS_ISO8859_1`, `CONFIG_NLS_UTF8`, USB mass storage (check they are built in or installed as modules). Add `dosfstools` to the x86 rescue image. | `USB-1`, `BAK-*` | exFAT sticks not supported. |
-| DIST-5 | Sign `manifest.json` in `do_ota_create` (`xor update create signature -s <key>`), publish `signature.json`, and ship the public key with the rescue shell settings. | `OTA-8` | Only SHA-256 integrity, no authenticity. |
-| DIST-6 | x86: memtest86+ EFI binary on the boot partition plus a GRUB menu entry `--id=MENU_MEMTEST`. | `TST-2` | Userspace memory test only. |
-| DIST-7 | Rescue image: mask/fix `systemd-networkd-persistent-storage.service` (fails on the read-only root). | cosmetics | One failed unit in rescue. |
+| DIST-1 | Done. Run `xor boot ok` (today `mark-boot-ok.sh`) automatically when the normal system has booted successfully: `xoros-boot-ok.service`, see `XD-3` in `../xor/REQUIREMENTS.md`. | `BOOT-*` | Counters grow on every normal boot; device falls into rescue after 6 boots. Health checks: executables in `/etc/xoros/boot-ok.d/` must pass first (`XD-3`). |
+| DIST-2 | Done. Add `smartmontools` and `nvme-cli` to `xoros-rescue-image`. | `TST-7` | Only sysfs health info. |
+| DIST-3 | Done. Make `/etc/resolv.conf` in the rescue image a symlink to `/run/xoros-rescue/resolv.conf` (or add `systemd-resolved`). | `NET-3` | Only the app resolves names; tools in the subshell do not. |
+| DIST-4 | Done. Rescue kernel: `CONFIG_EXFAT_FS`, `CONFIG_VFAT_FS`, `CONFIG_NLS_CODEPAGE_437`, `CONFIG_NLS_ISO8859_1`, `CONFIG_NLS_UTF8`, USB mass storage (check they are built in or installed as modules). Add `dosfstools` to the x86 rescue image. | `USB-1`, `BAK-*` | exFAT sticks not supported. |
+| DIST-5 | Done (opt-in): set `XOROS_OTA_SIGNING_KEY` (PEM path) for both builds; the rescue image installs the public key(s) in `/etc/xoros/ota-trusted-keys` (plus `XOROS_OTA_TRUSTED_KEYS`). Sign `manifest.json` in `do_ota_create` (`xor update create signature -s <key>`), publish `signature.json`, and ship the public key with the rescue shell settings. | `OTA-8` | Only SHA-256 integrity, no authenticity. |
+| DIST-6 | Done. x86: memtest86+ EFI binary on the boot partition plus a GRUB menu entry `--id=MENU_MEMTEST`. | `TST-2` | Userspace memory test only. |
+| DIST-7 | Done. Rescue image: mask/fix `systemd-networkd-persistent-storage.service` (fails on the read-only root). | cosmetics | One failed unit in rescue. |
 | DIST-8 | Bump `SRCREV` in `rescue-shell_git.bb` for each app release. The recipe installs `/usr/bin/xoros-rescue-shell` (via `cargo_bin`); the getty drop-in comes from `rescue-shell-service.bb`. | release | |
-| DIST-9 | Split `xor` into `xoros-core` + `xor` (same private repository) and update the recipes: `xor_git.bb` builds the `xor` workspace member, `xor boot` replaces `next-boot.sh`/`mark-boot-ok.sh` (`XD-1`, `XD-2`); `rescue-shell_git.bb` fetches `xoros-xor-tool` as a second `SRC_URI` (SSH, `SRCREV_core` = the `rev` in `Cargo.toml`) and adds the cargo `[patch]` (`XD-6`). | CORE-1 | The rescue shell cannot build against the crate. |
-| DIST-10 | Normal images: NetworkManager is the only network manager for wired/Wi-Fi interfaces. systemd-conf's `80-wired.network` is removed from the normal rootfs (`remove_networkd_wired` in `xoros-image-core.bb`), otherwise systemd-networkd configures `eth*` first and NM only assumes it. `net.ifnames=0` stays on the shared kernel command line, so `eth0`/`wlan0` match in both systems. Done. | `NET-6` | Exported keyfiles are loaded but never activated. |
+| DIST-9 | Done. Split `xor` into `xoros-core` + `xor` (same private repository) and update the recipes: `xor_git.bb` builds the `xor` workspace member, `xor boot` replaces `next-boot.sh`/`mark-boot-ok.sh` (`XD-1`, `XD-2`); `rescue-shell_git.bb` fetches `xoros-xor-tool` as a second `SRC_URI` (SSH, `SRCREV_core` = the `rev` in `Cargo.toml`) and adds the cargo `[patch]` (`XD-6`). | CORE-1 | The rescue shell cannot build against the crate. |
+| DIST-10 | Normal images: NetworkManager is the only network manager for wired/Wi-Fi interfaces. systemd-conf's `80-wired.network` is removed from the normal rootfs (`remove_networkd_wired` in `xoros-image-core.bb`), otherwise systemd-networkd configures `eth*` first and NM only assumes it. systemd-networkd itself is masked there (its wait-online would hold `network-online.target` for 2 min). `net.ifnames=0` stays on the shared kernel command line, so `eth0`/`wlan0` match in both systems. Done. | `NET-6` | Exported keyfiles are loaded but never activated. |
+| DIST-11 | grub.cfg: load only the listed variables and validate them (`BOOT-8`); `superusers`/`password_pbkdf2` with the build default and `source` of `EFI/BOOT/admin.cfg` as in 4.7; `--unrestricted` on every menu entry (incl. `MENU_MEMTEST`); `MENU_MODE` (`BOOT-9`) with the build default `XOROS_BOOT_MENU` (`shown` for now). | 4.7, `BOOT-8`, `BOOT-9` | Anybody at the console can edit the kernel command line in GRUB (e.g. `init=/bin/sh`). |
+| DIST-12 | Build variable `XOROS_ADMIN_PASSWORD_HASH` (optional, `grub.pbkdf2.sha512...` only; the build fails on anything else, so a clear text password can never end up in an image): the `bootimg_efi_grubenv` wic plugin writes it into grub.cfg (placeholder line, like `CMDLINE_IMAGE`), the rescue image installs it as `/etc/xoros/admin-password`. A hash is made with `grub-mkpasswd-pbkdf2` or `xor admin hash` (`XT-11`). | 4.7 | Only per-device passwords; a new device has no protection until one is set. |
+| DIST-13 | Raspberry Pi, production images: U-Boot autoboot cannot be interrupted (`CONFIG_BOOTDELAY=-2`), so the U-Boot shell is not reachable from the console. Devel images MAY keep the prompt. | 4.7 | The U-Boot shell bypasses GRUB and the password. |
+| DIST-14 | Production images (`xoros-image-stable` and anything shipped to customers; devel/audit keep their debug access): root locked, no `empty-root-password`/`allow-empty-password`/`allow-root-login`/`debug-tweaks`, no autologin getty; Weston `[keyboard] vt-switching=false` and no terminal or launcher in the kiosk session; `kernel.sysrq=0` (rescue image too); `sshd` key-only. | 4.7 | The normal system is the easier way in: a console user gets a root shell there. |
+| DIST-15 | Deployment guide (documentation, not the image): x86 UEFI setup password and boot only from the internal disk (USB/PXE boot off or after the disk); on the Pi the EEPROM boot order cannot be locked, so USB ports and the SD slot need physical protection where this matters. | 4.7 | Booting another medium bypasses everything above. |
 
 ## 13. Current state of the app (for orientation)
 
@@ -759,3 +876,6 @@ The `models` module holds an older manifest shape; replace it with the one in 6.
 3. **M3:** Backup/restore, factory reset, fsck, Wi-Fi config, NM keyfile copy, memory and disk tests, diagnostics
    bundle.
 4. **M4 (P2/P3):** resume, signatures, settings file, SSH remote support, SMART, stick test, rotation, PIN.
+5. **M5 (P2):** access protection: admin session and password management (`SEC-*`), `MENU_MODE` (`BOOT-9`), on top
+   of `xoros-core` C4 (`XC-37`, `XC-38`). Distro: `DIST-11`..`DIST-14` (grub.cfg, build default, U-Boot, image
+   hardening), `DIST-15` as documentation.
