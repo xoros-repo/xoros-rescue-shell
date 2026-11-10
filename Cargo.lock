@@ -1696,6 +1696,7 @@ dependencies = [
 [[package]]
 name = "xoros-core"
 version = "0.3.0"
+source = "git+ssh://git@github.com/xoros-repo/xoros-xor-tool.git?rev=fc892fd4678a009e8f0bc0b67c90b1a9de5110c6#fc892fd4678a009e8f0bc0b67c90b1a9de5110c6"
 dependencies = [
  "k256",
  "libc",

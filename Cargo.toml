@@ -29,8 +29,8 @@ flate2 = "1"
 # Shared device/boot/OTA logic (xoros-core).
 # Development form: a path dependency on a sibling checkout of xoros-xor-tool.
 # Release form (Yocto recipe redirects it with a cargo [patch], so keep this exact URL):
-#xoros-core = { git = "ssh://git@github.com/xoros-repo/xoros-xor-tool.git", rev = "25c338b44015ebeb87d067ad2025fce4708afa8d" }
-xoros-core = { path = "../xoros-xor-tool/xoros-core" }
+xoros-core = { git = "ssh://git@github.com/xoros-repo/xoros-xor-tool.git", rev = "fc892fd4678a009e8f0bc0b67c90b1a9de5110c6" }
+#xoros-core = { path = "../xoros-xor-tool/xoros-core" }
 
 [profile.release]
 lto = true
