@@ -13,11 +13,14 @@ use crate::tasks::{TaskCtx, TaskFailure, TaskKind, TaskState};
 pub const USAGE: &str =
     "  xoros-rescue-shell [--sim <dir>] --cli boot show [--json] | reset-counter A|B|both
                      | next A|B|rescue|clear | order A|B | max-tries N | disable A|B
-                     | rotation 0..3 | recreate-grubenv --confirm RECREATE
+                     | rotation 0..3 | menu shown|hidden|once|default
+                     | recreate-grubenv --confirm RECREATE
   xoros-rescue-shell [--sim <dir>] --cli power reboot | poweroff
                      | reboot-into A|B|rescue [--reset-counter] [--force]
   xoros-rescue-shell [--sim <dir>] --cli settings show [--json] | get <key> | set <key> <value>...
-                     | reset --confirm RESET | set-pin (PIN on stdin) | clear-pin
+                     | reset --confirm RESET | clear-pin
+  xoros-rescue-shell [--sim <dir>] --cli admin status [--json] | set-password (password on stdin)
+                     | clear-password
   xoros-rescue-shell [--sim <dir>] --cli time rtc [show|write]
   xoros-rescue-shell [--sim <dir>] --cli stick list | remove <stick>
   xoros-rescue-shell [--sim <dir>] --cli backup repair overlay|application
@@ -189,6 +192,14 @@ pub fn boot_cmd(app: &App, args: &[String]) -> Result<String, String> {
             let note = ctl::set_rotation(b, r).map_err(|e| e.to_string())?;
             Ok(format!("ROTATION={r}. {note}\n"))
         }
+        Some("menu") => {
+            let p = expect_args(args, 1, &[], &[])?;
+            let mode: xoros_core::boot::MenuMode = p[0]
+                .parse()
+                .map_err(|e| format!("{e} (use shown, hidden, once or default)"))?;
+            e(ctl::set_menu_mode(b, mode))?;
+            Ok(format!("MENU_MODE={}\n", mode.name()))
+        }
         Some("recreate-grubenv") => {
             expect_args(args, 0, &["--confirm"], &[])?;
             if opt(args, "--confirm").as_deref() != Some(RECREATE_GRUBENV_WORD) {
@@ -254,10 +265,12 @@ pub fn power_cmd(app: &App, args: &[String]) -> Result<String, String> {
 fn settings_text(st: &settings::State) -> String {
     let s = &st.settings;
     let mut t = format!("# {}\n", st.origin_text());
-    for k in &settings::KEYS[..6] {
+    for k in settings::USER_KEYS {
         t.push_str(&format!("{k} = {}\n", s.get(k).unwrap_or_default()));
     }
-    t.push_str(&format!("pin = {}\n", s.get("pin").unwrap_or_default()));
+    if s.pin_enabled() {
+        t.push_str("pin = set (old PIN; replaced by the admin password, see 'admin status')\n");
+    }
     if !st.system_keys.is_empty() {
         t.push_str(&format!(
             "# {} trusted key(s) from {}\n",
@@ -275,7 +288,7 @@ fn read_stdin_line() -> Result<String, String> {
     let mut line = String::new();
     std::io::stdin()
         .read_line(&mut line)
-        .map_err(|e| format!("Cannot read the PIN from stdin: {e}"))?;
+        .map_err(|e| format!("Cannot read from stdin: {e}"))?;
     Ok(line.trim().to_string())
 }
 
@@ -324,12 +337,7 @@ pub fn settings_cmd(app: &App, args: &[String]) -> Result<String, String> {
             Ok("Settings reset to the defaults.\n".into())
         }
         Some("set-pin") => {
-            expect_args(args, 0, &[], &[])?;
-            let pin = read_stdin_line()?;
-            let mut s = st.settings.clone();
-            s.set_pin(&pin)?;
-            save(&s)?;
-            Ok("PIN set: it is asked before destructive actions and the subshell.\n".into())
+            Err("The PIN was replaced by the admin password: use 'admin set-password'.".into())
         }
         Some("clear-pin") => {
             expect_args(args, 0, &[], &[])?;
@@ -339,7 +347,7 @@ pub fn settings_cmd(app: &App, args: &[String]) -> Result<String, String> {
             Ok("PIN removed.\n".into())
         }
         Some(other) => Err(format!(
-            "Unknown settings command '{other}' (show, get, set, reset, set-pin, clear-pin)."
+            "Unknown settings command '{other}' (show, get, set, reset, clear-pin)."
         )),
     }
 }
@@ -520,6 +528,50 @@ pub fn run_settings(app: &App, args: &[String]) -> i32 {
     print_result(settings_cmd(app, args))
 }
 
+// --------------------------------------------------------------------------------------------
+// admin password (SEC-8): the CLI runs as root, which is reachable only through the subshell or
+// SSH (both admin only), so it does not ask for the password.
+
+pub fn admin_cmd(app: &App, args: &[String]) -> Result<String, String> {
+    let b = app.backend.as_ref();
+    match args.first().map(String::as_str) {
+        Some("status") | None => {
+            expect_args(args, 0, &[], &["--json"])?;
+            let p = crate::access::protection();
+            if flag(args, "--json") {
+                let v = serde_json::json!({
+                    "state": p.name(),
+                    "protected": p.is_on(),
+                    "description": p.describe(),
+                });
+                return serde_json::to_string_pretty(&v)
+                    .map(|s| s + "\n")
+                    .map_err(|e| e.to_string());
+            }
+            Ok(format!("Admin password: {}\n", p.describe()))
+        }
+        Some("set-password") => {
+            expect_args(args, 0, &[], &[])?;
+            let pw = read_stdin_line()?;
+            xoros_core::admin::check_password_format(&pw).map_err(|e| e.to_string())?;
+            crate::access::unlock_for_cli();
+            crate::access::set_device_password(b, Some(&pw)).map(|m| m + "\n")
+        }
+        Some("clear-password") => {
+            expect_args(args, 0, &[], &[])?;
+            crate::access::unlock_for_cli();
+            crate::access::set_device_password(b, None).map(|m| m + "\n")
+        }
+        Some(other) => Err(format!(
+            "Unknown admin command '{other}' (status, set-password, clear-password)."
+        )),
+    }
+}
+
+pub fn run_admin(app: &App, args: &[String]) -> i32 {
+    print_result(admin_cmd(app, args))
+}
+
 pub fn run_stick(app: &App, args: &[String]) -> i32 {
     print_result(stick_cmd(app, args))
 }
@@ -661,7 +713,8 @@ mod tests {
         let st = settings::State::default();
         let t = settings_text(&st);
         assert!(t.contains("ota_base_url = https://"));
-        assert!(t.contains("pin = off"));
+        assert!(!t.contains("pin ="), "no PIN line without an old PIN");
+        assert!(t.contains("admin_idle_timeout = 300"));
         let (_d, app) = app();
         assert!(settings_cmd(&app, &w(&["get", "theme"])).is_ok());
         assert!(settings_cmd(&app, &w(&["get", "nope"])).is_err());

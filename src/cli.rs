@@ -8,17 +8,17 @@ use crate::constants::{APP_NAME, APP_VERSION, SIM_ENV_VAR};
 use std::sync::{Arc, Mutex};
 
 use crate::backend::Stick;
-use crate::backup::{ImportMode, PartitionRole};
 use crate::backend::{PartRole, Slot};
+use crate::backup::{ImportMode, PartitionRole};
 use crate::backup_jobs;
-use crate::hwtest;
 use crate::constants::WRITE_BOTH_CONFIRM_WORD;
+use crate::hwtest;
 use crate::net;
 use crate::slots::RescueCheck;
+use crate::tasks::{lock, TaskCtx, TaskFailure, TaskKind, TaskState};
 use crate::update_jobs;
 use xoros_core::env::Suffix;
 use xoros_core::manifest::Target;
-use crate::tasks::{lock, TaskCtx, TaskFailure, TaskKind, TaskState};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
@@ -48,6 +48,8 @@ pub enum Command {
     Power(Vec<String>),
     Settings(Vec<String>),
     Stick(Vec<String>),
+    /// `--cli admin <args>` (SEC-8).
+    Admin(Vec<String>),
     /// `--sim-init <dir>`: write an example simulation directory.
     SimInit(PathBuf),
     Help,
@@ -176,20 +178,19 @@ where
             Some("power") => command = Command::Power(words.map(str::to_string).collect()),
             Some("settings") => command = Command::Settings(words.map(str::to_string).collect()),
             Some("stick") => command = Command::Stick(words.map(str::to_string).collect()),
+            Some("admin") => command = Command::Admin(words.map(str::to_string).collect()),
             Some(other) => {
                 return Err(format!(
                     "CLI command '{other}' is not implemented yet \
                      (available: status, backup, update, net, time, test, report, diag, ssh, \
-                     boot, power, settings, stick)."
+                     boot, power, settings, stick, admin)."
                 ))
             }
-            None => {
-                return Err(
-                    "--cli needs a command (status, backup, update, net, time, test, report, diag, \
+            None => return Err(
+                "--cli needs a command (status, backup, update, net, time, test, report, diag, \
                      ssh, boot, power, settings, stick)."
-                        .into(),
-                )
-            }
+                    .into(),
+            ),
         }
     }
     Ok(Options { sim, command })
@@ -406,9 +407,11 @@ fn backup_cmd(app: &App, args: &[String]) -> Result<String, String> {
             Ok(summary)
         }
         _ => crate::cli_admin::backup_cmd(app, args).unwrap_or_else(|| {
-            Err("backup needs: sticks | list | export | verify | import | reset | repair | mkfs \
+            Err(
+                "backup needs: sticks | list | export | verify | import | reset | repair | mkfs \
                  | image."
-                .into())
+                    .into(),
+            )
         }),
     }
 }
@@ -493,7 +496,10 @@ fn origin_arg(app: &App, args: &[String]) -> Result<update_jobs::Origin, String>
     };
     if let Some(t) = &dev.target {
         if t.suffix != suffix {
-            eprintln!("warning: switching suffix from '{}' to '{suffix}'.", t.suffix);
+            eprintln!(
+                "warning: switching suffix from '{}' to '{suffix}'.",
+                t.suffix
+            );
         }
     }
     let proxy = opt_value(args, "--proxy").or_else(|| crate::settings::current().proxy());
@@ -552,7 +558,12 @@ fn update_cmd(app: &App, args: &[String]) -> Result<String, String> {
             check_options(
                 &args[1..],
                 &values,
-                &["--no-hash", "--allow-downgrade", "--allow-unverified", "--no-resume"],
+                &[
+                    "--no-hash",
+                    "--allow-downgrade",
+                    "--allow-unverified",
+                    "--no-resume",
+                ],
             )?;
             let targets: update_jobs::Targets = opt_value(args, "--slot")
                 .ok_or("update start: missing --slot A|B|AB.")?
@@ -578,7 +589,10 @@ fn update_cmd(app: &App, args: &[String]) -> Result<String, String> {
                     .iter()
                     .find(|r| r.image.build_timestamp.as_str() == ts)
                     .ok_or_else(|| format!("No rootfs image with timestamp {ts}."))?,
-                None => c.rootfs.first().ok_or("The manifest has no rootfs image.")?,
+                None => c
+                    .rootfs
+                    .first()
+                    .ok_or("The manifest has no rootfs image.")?,
             };
             if row.is_downgrade(targets) && !has_flag(args, "--allow-downgrade") {
                 return Err(
@@ -637,12 +651,16 @@ fn net_cmd(app: &App, args: &[String]) -> Result<String, String> {
             Ok(format!(
                 "{}: {}\n",
                 env.resolv_conf().display(),
-                v.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(" ")
+                v.iter()
+                    .map(|i| i.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" ")
             ))
         }
         Some("test") => {
             let dev = update_jobs::device_target(app.backend.as_ref());
-            let base = opt_value(args, "--base").unwrap_or_else(|| crate::settings::current().ota_base_url);
+            let base = opt_value(args, "--base")
+                .unwrap_or_else(|| crate::settings::current().ota_base_url);
             let url = match &dev.target {
                 Some(t) => xoros_core::source::ota_url(&base, t, "manifest.json"),
                 None => base.clone(),
@@ -666,11 +684,13 @@ fn net_cmd(app: &App, args: &[String]) -> Result<String, String> {
             }
         }
         Some("speed") => crate::cli_tests::net_speed(app, &args[1..]),
-        _ => crate::cli_net::net_cmd(app, args).unwrap_or_else(|| {
-            Err("net needs: up | dns | test | speed | show | scan | config | unconfig | list | \
+        _ => {
+            crate::cli_net::net_cmd(app, args).unwrap_or_else(|| {
+                Err("net needs: up | dns | test | speed | show | scan | config | unconfig | list | \
                  remember | forget | export-nm | nm-list | import-nm."
                 .into())
-        }),
+            })
+        }
     }
 }
 
@@ -723,7 +743,10 @@ fn test_request(app: &App, args: &[String]) -> Result<Option<hwtest::TestRequest
     use hwtest::{fsck::FsckRequest, memtest, slotcheck, TestRequest};
     let num = |name: &str| -> Result<Option<u32>, String> {
         opt_value(args, name)
-            .map(|v| v.parse::<u32>().map_err(|_| format!("{name}: not a number: '{v}'.")))
+            .map(|v| {
+                v.parse::<u32>()
+                    .map_err(|_| format!("{name}: not a number: '{v}'."))
+            })
             .transpose()
     };
     // Words that are neither options nor option values.
@@ -876,7 +899,9 @@ pub fn run_test(app: &App, args: &[String]) -> i32 {
     };
     let env = hwtest::TestEnv::of(app);
     let (kind, title) = (req.task_kind(), req.kind().title());
-    match run_cli_task(app, title, kind, move |ctx| Ok(hwtest::run_request(&env, &req, ctx))) {
+    match run_cli_task(app, title, kind, move |ctx| {
+        Ok(hwtest::run_request(&env, &req, ctx))
+    }) {
         Ok(r) => {
             print!("{}", r.text());
             r.outcome.exit_code()
@@ -938,7 +963,12 @@ mod tests {
     fn check_options_rejects_unknown_and_missing_values() {
         let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         let flags = ["--no-hash"];
-        assert!(check_options(&a(&["--base", "http://x", "--no-hash"]), SOURCE_OPTIONS, &flags).is_ok());
+        assert!(check_options(
+            &a(&["--base", "http://x", "--no-hash"]),
+            SOURCE_OPTIONS,
+            &flags
+        )
+        .is_ok());
         assert!(check_options(&a(&["http://x"]), SOURCE_OPTIONS, &flags).is_err());
         assert!(check_options(&a(&["--base"]), SOURCE_OPTIONS, &flags).is_err());
         assert!(check_options(&a(&["--bsae", "http://x"]), SOURCE_OPTIONS, &flags).is_err());
@@ -980,7 +1010,11 @@ mod tests {
         );
         assert_eq!(
             parse_args(["--cli", "update", "start", "--slot", "B"]).map(|o| o.command),
-            Ok(Command::Update(vec!["start".into(), "--slot".into(), "B".into()]))
+            Ok(Command::Update(vec![
+                "start".into(),
+                "--slot".into(),
+                "B".into()
+            ]))
         );
         assert_eq!(
             parse_args(["--cli", "time", "sync"]).map(|o| o.command),
@@ -1012,9 +1046,8 @@ mod tests {
         use crate::hwtest::TestRequest;
         let d = crate::hw::testutil::TempDir::new("cli-test");
         crate::backend::sim::SimBackend::create_example(d.path()).expect("example");
-        let app = App::new(
-            crate::app::make_backend(Some(d.path().to_path_buf())).expect("backend"),
-        );
+        let app =
+            App::new(crate::app::make_backend(Some(d.path().to_path_buf())).expect("backend"));
         let req = |words: &[&str]| {
             let args: Vec<String> = words.iter().map(|w| w.to_string()).collect();
             test_request(&app, &args)
@@ -1036,7 +1069,10 @@ mod tests {
             req(&["disk", "--device", "sda4"]),
             Ok(Some(TestRequest::Disk(Some(PartRole::Rescue))))
         );
-        assert_eq!(req(&["disk", "--device", "sda"]), Ok(Some(TestRequest::Disk(None))));
+        assert_eq!(
+            req(&["disk", "--device", "sda"]),
+            Ok(Some(TestRequest::Disk(None)))
+        );
         assert!(req(&["disk", "--device", "sdz"]).is_err());
         match req(&["slots", "B", "--no-files", "--manifest", "none"]) {
             Ok(Some(TestRequest::Slots(o))) => {
@@ -1046,7 +1082,13 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
-        match req(&["slots", "--stick", "usb1", "--path", "xoros/ota/1.0/qemux86-64/devel"]) {
+        match req(&[
+            "slots",
+            "--stick",
+            "usb1",
+            "--path",
+            "xoros/ota/1.0/qemux86-64/devel",
+        ]) {
             Ok(Some(TestRequest::Slots(o))) => {
                 assert_eq!(o.slots, Slot::ALL.to_vec());
                 assert!(matches!(o.manifest, ManifestMode::Origin(_)));

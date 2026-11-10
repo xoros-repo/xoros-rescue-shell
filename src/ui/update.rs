@@ -180,11 +180,20 @@ fn usb_start(s: &mut Ui) {
         }
         let list = items
             .iter()
-            .map(|i| (crate::report::ellipsize(&i.label(), MAX_W - 4), i.origin(&stick)))
+            .map(|i| {
+                (
+                    crate::report::ellipsize(&i.label(), MAX_W - 4),
+                    i.origin(&stick),
+                )
+            })
             .collect();
-        dialogs::choose(s, "Update from a stick", "Choose the update:", list, |s, o| {
-            start_check(s, o.clone())
-        });
+        dialogs::choose(
+            s,
+            "Update from a stick",
+            "Choose the update:",
+            list,
+            |s, o| start_check(s, o.clone()),
+        );
     });
 }
 
@@ -314,18 +323,28 @@ fn confirm_write(s: &mut Ui, c: CheckResult, row: ImageRow, targets: Targets) {
         let req = req.clone();
         let write = move |s: &mut Ui| {
             let req = req.clone();
-            crate::ui::pin::require(s, "slot update", move |s| start_write(s, req.clone()));
+            crate::ui::access::require(s, "slot update", move |s| start_write(s, req.clone()));
         };
         if downgrade {
-            dialogs::confirm(s, texts::TITLE_CONFIRM, texts::DOWNGRADE_CONFIRM, "Downgrade", write);
+            dialogs::confirm(
+                s,
+                texts::TITLE_CONFIRM,
+                texts::DOWNGRADE_CONFIRM,
+                "Downgrade",
+                write,
+            );
         } else {
             write(s);
         }
     };
     if targets == Targets::Both {
-        dialogs::confirm_typed(s, "Write both slots", &text, WRITE_BOTH_CONFIRM_WORD, move |s, _| {
-            go(s)
-        });
+        dialogs::confirm_typed(
+            s,
+            "Write both slots",
+            &text,
+            WRITE_BOTH_CONFIRM_WORD,
+            move |s, _| go(s),
+        );
     } else {
         dialogs::confirm(s, texts::TITLE_CONFIRM, &text, "Write", go);
     }
@@ -353,10 +372,9 @@ fn start_write(s: &mut Ui, req: UpdateRequest) {
             let Some(app) = crate::ui::app(s) else { return };
             let note = disabled_note(app.backend.as_ref(), &req.targets.slots());
             match end {
-                JobEnd::Ok(o) => s.add_layer(dialogs::text_screen(
-                    "Update finished",
-                    &update_summary(&o),
-                )),
+                JobEnd::Ok(o) => {
+                    s.add_layer(dialogs::text_screen("Update finished", &update_summary(&o)))
+                }
                 JobEnd::Cancelled => dialogs::info(
                     s,
                     "Update cancelled",

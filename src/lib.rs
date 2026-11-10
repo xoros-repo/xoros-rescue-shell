@@ -1,5 +1,6 @@
 //! XorOS rescue shell. Everything outside `ui` is independent of ratatui (ARCH-1).
 
+pub mod access;
 pub mod app;
 pub mod backend;
 pub mod backup;
@@ -11,8 +12,8 @@ pub mod cli_net;
 pub mod cli_tests;
 pub mod clock;
 pub mod cmd;
-pub mod diagnostics;
 pub mod constants;
+pub mod diagnostics;
 pub mod hw;
 pub mod hwtest;
 pub mod logging;
@@ -23,10 +24,10 @@ pub mod power;
 pub mod reach;
 pub mod report;
 pub mod rtc;
+pub mod settings;
 pub mod slots;
 pub mod status;
 pub mod sticks;
-pub mod settings;
 pub mod sysinfo;
 pub mod tasks;
 pub mod terminal;

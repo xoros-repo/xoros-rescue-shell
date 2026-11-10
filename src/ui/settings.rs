@@ -15,8 +15,6 @@ const F_NTP: &str = "cfg_ntp_servers";
 const F_KEYS: &str = "cfg_trusted_keys";
 const F_SIG: &str = "cfg_require_signature";
 const F_THEME: &str = "cfg_theme";
-const F_PIN1: &str = "cfg_pin1";
-const F_PIN2: &str = "cfg_pin2";
 
 fn field(label: &str, name: &str, value: &str) -> LinearLayout {
     LinearLayout::horizontal()
@@ -34,9 +32,9 @@ fn text_of(s: &mut Ui, name: &str) -> String {
         .unwrap_or_default()
 }
 
-/// Tools -> Settings (behind the PIN).
+/// Tools -> Settings: anybody may look, saving needs an admin session (SEC-1).
 pub fn show(s: &mut Ui) {
-    crate::ui::pin::require(s, "settings", open);
+    open(s);
 }
 
 fn open(s: &mut Ui) {
@@ -98,25 +96,31 @@ fn open(s: &mut Ui) {
         )
         .child(TextView::new(" "))
         .child(TextView::new(info).max_width(MAX_W));
-    show_screen(
-        s,
-        closable(
-            Dialog::around(layout)
-                .title(texts::TITLE_SETTINGS)
-                .button("Save", save_clicked)
-                .button("PIN...", pin_menu)
-                .button("Defaults", |s| {
-                    dialogs::confirm(
-                        s,
-                        texts::TITLE_CONFIRM,
-                        "Replace all settings (and the PIN) with the built-in defaults?",
-                        "Reset",
-                        |s| store(s, Settings::default(), "Settings reset to the defaults."),
-                    )
-                })
-                .dismiss_button(texts::BTN_CANCEL),
-        ),
-    );
+    let mut d = Dialog::around(layout)
+        .title(texts::TITLE_SETTINGS)
+        .button(
+            "Save",
+            crate::ui::access::gate("save settings", save_clicked),
+        )
+        .button(
+            "Defaults",
+            crate::ui::access::gate("reset settings", |s| {
+                dialogs::confirm(
+                    s,
+                    texts::TITLE_CONFIRM,
+                    "Replace all settings (and an old PIN) with the built-in defaults?",
+                    "Reset",
+                    |s| store(s, Settings::default(), "Settings reset to the defaults."),
+                )
+            }),
+        );
+    if c.pin_enabled() {
+        d = d.button(
+            "Remove old PIN",
+            crate::ui::access::gate("remove old PIN", pin_menu),
+        );
+    }
+    show_screen(s, closable(d.dismiss_button(texts::BTN_CANCEL)));
 }
 
 fn save_clicked(s: &mut Ui) {
@@ -172,42 +176,15 @@ fn store(s: &mut Ui, next: Settings, done: &str) {
     }
 }
 
+/// SEC-6: the old PIN can only be removed; the admin password replaces it.
 fn pin_menu(s: &mut Ui) {
-    let enabled = settings::current().pin_enabled();
-    let layout = LinearLayout::vertical()
-        .child(TextView::new(texts::PIN_INFO).max_width(60))
-        .child(TextView::new(" "))
-        .child(
-            LinearLayout::horizontal()
-                .child(TextView::new(format!("{:<12}", "New PIN")))
-                .child(EditView::new().secret().with_name(F_PIN1).fixed_width(16)),
-        )
-        .child(
-            LinearLayout::horizontal()
-                .child(TextView::new(format!("{:<12}", "Repeat")))
-                .child(EditView::new().secret().with_name(F_PIN2).fixed_width(16)),
-        );
-    let mut d = Dialog::around(layout)
-        .title(texts::TITLE_PIN)
-        .button("Set PIN", |s| {
-            let (a, b) = (text_of(s, F_PIN1), text_of(s, F_PIN2));
-            if a != b {
-                dialogs::error(s, "PIN not set.", &"The two entries differ.");
-                return;
-            }
-            let mut next = settings::current();
-            if let Err(e) = next.set_pin(&a) {
-                dialogs::error(s, "PIN not set.", &e);
-                return;
-            }
-            store(s, next, "PIN set.");
-        });
-    if enabled {
-        d = d.button("Remove PIN", |s| {
-            let mut next = settings::current();
-            next.clear_pin();
-            store(s, next, "PIN removed.");
-        });
-    }
-    s.add_layer(closable(d.dismiss_button(texts::BTN_CANCEL)));
+    dialogs::confirm(s, texts::TITLE_PIN, texts::PIN_INFO, "Remove PIN", |s| {
+        let mut next = settings::current();
+        next.clear_pin();
+        store(s, next, "PIN removed.");
+        if let Some(app) = app(s) {
+            crate::access::reload(app.backend.as_ref());
+        }
+        crate::ui::update_status_line(s);
+    });
 }

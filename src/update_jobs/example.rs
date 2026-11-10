@@ -23,7 +23,8 @@ pub fn fake_image(size: usize, seed: u32) -> Vec<u8> {
         })
         .collect();
     if size >= SUPERBLOCK_SIZE {
-        v[..SUPERBLOCK_SIZE].copy_from_slice(&crate::hwtest::slotcheck::example_superblock(size as u64));
+        v[..SUPERBLOCK_SIZE]
+            .copy_from_slice(&crate::hwtest::slotcheck::example_superblock(size as u64));
     }
     v
 }

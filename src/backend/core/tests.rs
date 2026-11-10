@@ -410,7 +410,11 @@ fn stick_file_system_is_probed() {
     let st = sticks.iter().find(|s| s.id == "sdc1").expect("sdc1");
     assert_eq!(st.fs_type.as_deref(), Some("ext4"));
     assert!(!st.is_fat());
-    assert!(st.description.contains("ext4  BACKUPS"), "{}", st.description);
+    assert!(
+        st.description.contains("ext4  BACKUPS"),
+        "{}",
+        st.description
+    );
     // A partition without a recognisable file system is not offered.
     write(&f.paths.dev.join("sdc1"), &[0u8; 80 * 1024]);
     assert!(!b

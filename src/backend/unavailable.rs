@@ -7,9 +7,9 @@
 use std::path::PathBuf;
 
 use super::{
-    BackendError, BlockDevice, BootPartition, BootState, BootTarget, BuildInfo, ErrorKind, FsUsage, Layout,
-    MountGuard, PartRole, PartitionWriter, ProgressFn, RescueReason, RescueSystemInfo, Result, Slot, Stick,
-    SystemBackend,
+    BackendError, BlockDevice, BootPartition, BootState, BootTarget, BuildInfo, ErrorKind, FsUsage,
+    Layout, MountGuard, PartRole, PartitionWriter, ProgressFn, RescueReason, RescueSystemInfo,
+    Result, Slot, Stick, SystemBackend,
 };
 use crate::backup::tools::{CommandRunner, SystemRunner};
 use crate::constants::{OS_RELEASE, RUN_DIR};

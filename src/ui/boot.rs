@@ -25,14 +25,30 @@ const ACTIONS: &[(&str, Action)] = &[
     ("MAX_TRIES...", max_tries),
     ("Disable slot...", disable_slot),
     ("Console rotation...", rotation),
+    ("Boot menu visibility...", menu_mode),
     ("Raw grubenv view", raw_view),
     ("Recreate grubenv...", recreate_grubenv),
 ];
 
+/// Actions that only read (SEC-1); all others need an admin session.
+fn is_read_only(action: Action) -> bool {
+    std::ptr::fn_addr_eq(action, raw_view as Action)
+}
+
+/// Run a Boot action, behind the admin session unless it only reads (SEC-1).
+fn run_action(s: &mut Ui, label: &str, action: Action) {
+    if is_read_only(action) {
+        action(s);
+    } else {
+        crate::ui::access::require(s, label, action);
+    }
+}
+
 pub fn menu() -> Tree {
     let mut t = Tree::new().leaf("Boot control", show_boot).delimiter();
     for (label, action) in ACTIONS {
-        t.add_leaf(*label, *action);
+        let (label, action) = (*label, *action);
+        t.add_leaf(label, move |s| run_action(s, label, action));
     }
     t
 }
@@ -56,6 +72,9 @@ fn summary_text(b: &dyn SystemBackend) -> String {
     };
     let next = st.next_boot.map(|t| t.menu_id()).unwrap_or("(none)");
     let last = st.last_boot.map(|t| t.name()).unwrap_or("-");
+    let menu = ctl::menu_mode(b)
+        .map(|m| m.name().to_string())
+        .unwrap_or_else(|_| "unknown".into());
     let predicted = b
         .predict()
         .map(|t| t.name().to_string())
@@ -63,7 +82,7 @@ fn summary_text(b: &dyn SystemBackend) -> String {
     format!(
         "Try counters   {}   {}   MAX_TRIES: {}\n\
          ORDER: {}, {}   NEXT_BOOT: {next}   LAST_BOOT: {last}\n\
-         ROTATION: {} ({} deg)   Predicted next boot: {predicted}\n\n\
+         ROTATION: {} ({} deg)   Boot menu: {menu}   Predicted next boot: {predicted}\n\n\
          grubenv:\n{}",
         tries(Slot::A),
         tries(Slot::B),
@@ -80,11 +99,11 @@ fn summary_text(b: &dyn SystemBackend) -> String {
 pub fn show_boot(s: &mut Ui) {
     let Some(app) = app(s) else { return };
     let summary = summary_text(app.backend.as_ref());
-    let mut select = SelectView::<Action>::new();
+    let mut select = SelectView::<(&'static str, Action)>::new();
     for (label, action) in ACTIONS {
-        select.add_item(*label, *action);
+        select.add_item(*label, (*label, *action));
     }
-    let select = select.on_submit(|s, a: &Action| a(s));
+    let select = select.on_submit(|s, a: &(&'static str, Action)| run_action(s, a.0, a.1));
     let layout = LinearLayout::vertical()
         .child(
             ScrollView::new(TextView::new(summary).with_name(BOOT_SUMMARY))
@@ -320,6 +339,36 @@ fn rotation(s: &mut Ui) {
             apply(s, "Set rotation", move |b| ctl::set_rotation(b, r));
             // Redraw everything in case the console geometry changed (RT-4).
             s.clear();
+        },
+    );
+}
+
+/// Boot menu visibility (`MENU_MODE`, BOOT-9, SEC-7).
+fn menu_mode(s: &mut Ui) {
+    use xoros_core::boot::MenuMode;
+    let items = vec![
+        ("Shown (3 s timeout)".to_string(), MenuMode::Shown),
+        (
+            "Hidden (boots the default entry directly)".to_string(),
+            MenuMode::Hidden,
+        ),
+        ("Show once on the next boot".to_string(), MenuMode::Once),
+        ("Build default".to_string(), MenuMode::Default),
+    ];
+    choose(
+        s,
+        "Boot menu visibility",
+        texts::MENU_MODE_EXPLANATION,
+        items,
+        |s, m| {
+            let m = *m;
+            apply(s, "Boot menu visibility", move |b| {
+                ctl::set_menu_mode(b, m)?;
+                Ok(format!(
+                    "MENU_MODE={} (applied by GRUB on the next boot).",
+                    m.name()
+                ))
+            });
         },
     );
 }

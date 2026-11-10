@@ -139,8 +139,18 @@ impl CommandRunner for SystemRunner {
                 String::from_utf8_lossy(&buf).into_owned()
             })
         };
-        let out_t = drain(child.stdout.take().map(|r| Box::new(r) as Box<dyn io::Read + Send>));
-        let err_t = drain(child.stderr.take().map(|r| Box::new(r) as Box<dyn io::Read + Send>));
+        let out_t = drain(
+            child
+                .stdout
+                .take()
+                .map(|r| Box::new(r) as Box<dyn io::Read + Send>),
+        );
+        let err_t = drain(
+            child
+                .stderr
+                .take()
+                .map(|r| Box::new(r) as Box<dyn io::Read + Send>),
+        );
         let mut killed = false;
         let status = loop {
             if let Some(st) = child.try_wait().map_err(io_err)? {

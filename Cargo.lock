@@ -841,6 +841,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "pbkdf2"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "112d82ceb8c5bf524d9af484d4e4970c9fd5a0cc15ba14ad93dccd28873b0629"
+dependencies = [
+ "digest",
+ "hmac",
+]
+
+[[package]]
 name = "pem-rfc7468"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1686,11 +1696,12 @@ dependencies = [
 [[package]]
 name = "xoros-core"
 version = "0.3.0"
-source = "git+ssh://git@github.com/xoros-repo/xoros-xor-tool.git?rev=25c338b44015ebeb87d067ad2025fce4708afa8d#25c338b44015ebeb87d067ad2025fce4708afa8d"
+source = "git+ssh://git@github.com/xoros-repo/xoros-xor-tool.git?rev=fc892fd4678a009e8f0bc0b67c90b1a9de5110c6#fc892fd4678a009e8f0bc0b67c90b1a9de5110c6"
 dependencies = [
  "k256",
  "libc",
  "log",
+ "pbkdf2",
  "rustls",
  "rustls-pki-types",
  "serde",

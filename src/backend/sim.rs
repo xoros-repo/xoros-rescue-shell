@@ -275,10 +275,18 @@ impl SimBackend {
             info.rescue_image_sha256 = Some(sha.clone());
         }
         b.store(&state)?;
-        write_example_slots(dir)
-            .map_err(|e| BackendError::io(format!("Cannot write the slot images in {}", dir.display()), e))?;
-        write_example_updates(dir, &data[..image_len as usize])
-            .map_err(|e| BackendError::io(format!("Cannot write the example OTA tree in {}", dir.display()), e))
+        write_example_slots(dir).map_err(|e| {
+            BackendError::io(
+                format!("Cannot write the slot images in {}", dir.display()),
+                e,
+            )
+        })?;
+        write_example_updates(dir, &data[..image_len as usize]).map_err(|e| {
+            BackendError::io(
+                format!("Cannot write the example OTA tree in {}", dir.display()),
+                e,
+            )
+        })
     }
 }
 
@@ -309,7 +317,11 @@ fn write_example_updates(dir: &Path, rescue: &[u8]) -> std::io::Result<()> {
     let target = Target::new("1.0", "qemux86-64", Suffix::Devel);
     let image = fake_image(8 * MIB as usize, 42);
     let images = [
-        (ImageType::Rootfs, image.as_slice(), EXAMPLE_UPDATE_TIMESTAMP),
+        (
+            ImageType::Rootfs,
+            image.as_slice(),
+            EXAMPLE_UPDATE_TIMESTAMP,
+        ),
         (ImageType::Rescue, rescue, EXAMPLE_UPDATE_TIMESTAMP),
     ];
     let rel = target.rel_path();
@@ -454,9 +466,7 @@ impl SystemBackend for SimBackend {
     }
 
     fn set_next_boot(&self, target: Option<BootTarget>) -> Result<()> {
-        self.update_env("set_next_boot", |s| {
-            s.set_next_boot(target.map(Into::into))
-        })
+        self.update_env("set_next_boot", |s| s.set_next_boot(target.map(Into::into)))
     }
 
     fn set_order(&self, first: Slot) -> Result<()> {
@@ -464,9 +474,7 @@ impl SystemBackend for SimBackend {
     }
 
     fn set_max_tries(&self, max_tries: u8) -> Result<()> {
-        self.update_env("set_max_tries", |s| {
-            s.set_max_tries(u32::from(max_tries))
-        })
+        self.update_env("set_max_tries", |s| s.set_max_tries(u32::from(max_tries)))
     }
 
     fn set_rotation(&self, rotation: u8) -> Result<()> {
@@ -722,7 +730,9 @@ impl SystemBackend for SimBackend {
         let path = match role {
             Some(r) => self.image_path(&s, r),
             None => {
-                let disk = self.dir.join(s.images.get("disk").map_or("disk.img", String::as_str));
+                let disk = self
+                    .dir
+                    .join(s.images.get("disk").map_or("disk.img", String::as_str));
                 if disk.exists() {
                     disk
                 } else {
@@ -961,7 +971,10 @@ mod tests {
         b.reset_tries(Slot::B).expect("reset");
         let st = b.boot_state().expect("state");
         assert!(st.raw.iter().any(|(k, v)| k == "CUSTOM" && v == "keep me"));
-        assert_eq!(fs::metadata(b.grubenv_path()).map(|m| m.len()).ok(), Some(1024));
+        assert_eq!(
+            fs::metadata(b.grubenv_path()).map(|m| m.len()).ok(),
+            Some(1024)
+        );
     }
 
     #[test]

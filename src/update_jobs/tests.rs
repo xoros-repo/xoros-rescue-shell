@@ -192,7 +192,10 @@ fn device_target_from_newest_slot() {
     let mut s = f.b.load().expect("load");
     s.slots.rootfs_a = None;
     s.slots.rootfs_b = None;
-    f.d.write("sim.json", serde_json::to_string(&s).expect("json").as_bytes());
+    f.d.write(
+        "sim.json",
+        serde_json::to_string(&s).expect("json").as_bytes(),
+    );
     let d = device_target(f.b.as_ref());
     assert_eq!(d.target, None);
     // From the rescue host name xoros-rescue-<machine>.
@@ -315,7 +318,13 @@ fn usb_tree_to_both_slots_and_single_image() {
     let stick_dir = f.d.path().join("sticks/usb1");
     // OTA tree below xoros/ota/ (depth 5 from the root) and a single image with sidecars.
     let tree = stick_dir.join("xoros/ota/1.0/qemux86-64/devel");
-    write_ota_tree(&tree, &target(), &[(ImageType::Rootfs, &f.image, TS)], CHUNK).expect("tree");
+    write_ota_tree(
+        &tree,
+        &target(),
+        &[(ImageType::Rootfs, &f.image, TS)],
+        CHUNK,
+    )
+    .expect("tree");
     let single = fake_image(120_000, 3);
     write_single_image(
         &stick_dir.join("images"),
@@ -404,7 +413,10 @@ fn wrong_machine_rescue_image_and_running_slot_are_refused() {
     // The running slot is refused by the writer.
     let mut s = f.b.load().expect("load");
     s.current_boot = "ROOTFS_B".into();
-    f.d.write("sim.json", serde_json::to_string(&s).expect("json").as_bytes());
+    f.d.write(
+        "sim.json",
+        serde_json::to_string(&s).expect("json").as_bytes(),
+    );
     let e = update_in_task(&f.b, &origin, &c.rootfs[0].image, Targets::B).expect_err("running");
     assert!(e.contains("running system"), "{e}");
     assert_eq!(f.b.boot_state().expect("st").try_count(Slot::B), 3);
@@ -454,15 +466,25 @@ fn signature_policy_from_settings() {
     // Signed, but no trusted key: required -> refused; not required -> "not checked".
     assert!(load(&s, &[]).is_err());
     s.require_signature = false;
-    assert_eq!(load(&s, &[]).expect("not checked"), SignatureStatus::NotChecked);
+    assert_eq!(
+        load(&s, &[]).expect("not checked"),
+        SignatureStatus::NotChecked
+    );
     // The server's `pk` is never trusted by itself: a different trusted key fails.
     s.set("trusted_keys", &other).expect("other key");
     assert!(load(&s, &[]).is_err());
     // Trusted from the settings or from the rescue image's key file.
-    s.set("trusted_keys", &format!("{other} {pk}")).expect("keys");
-    assert!(matches!(load(&s, &[]), Ok(SignatureStatus::Verified { .. })));
+    s.set("trusted_keys", &format!("{other} {pk}"))
+        .expect("keys");
+    assert!(matches!(
+        load(&s, &[]),
+        Ok(SignatureStatus::Verified { .. })
+    ));
     s.set("trusted_keys", "").expect("none");
-    assert!(matches!(load(&s, std::slice::from_ref(&pk)), Ok(SignatureStatus::Verified { .. })));
+    assert!(matches!(
+        load(&s, std::slice::from_ref(&pk)),
+        Ok(SignatureStatus::Verified { .. })
+    ));
     // A changed manifest no longer matches the signature.
     let m = f.ota.join("manifest.json");
     let mut bytes = fs::read(&m).expect("read");

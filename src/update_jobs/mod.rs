@@ -22,8 +22,8 @@ use xoros_core::env::{BuildTimestamp, Suffix};
 use xoros_core::flash::{self, FlashOptions, FlashReport, UpdateOptions};
 use xoros_core::manifest::{Image, ImageType, Manifest, Relation, Target};
 use xoros_core::source::{
-    load_manifest, DirSource, FileMeta, FileSource, HttpSource, ImageSource, SignaturePolicy,
-    SignatureStatus, Sidecars,
+    load_manifest, DirSource, FileMeta, FileSource, HttpSource, ImageSource, Sidecars,
+    SignaturePolicy, SignatureStatus,
 };
 use xoros_core::squashfs::{Superblock, SUPERBLOCK_SIZE};
 use xoros_core::{Phase, ProgressEvent};
@@ -403,9 +403,7 @@ pub fn signature_text(s: &SignatureStatus) -> String {
     match s {
         SignatureStatus::Verified { key } => format!("verified (trusted key #{})", key.index),
         SignatureStatus::Unsigned => "unsigned (no signature.json)".into(),
-        SignatureStatus::NotChecked => {
-            "signed, not checked (no trusted keys configured)".into()
-        }
+        SignatureStatus::NotChecked => "signed, not checked (no trusted keys configured)".into(),
         _ => "unknown".into(),
     }
 }
@@ -487,8 +485,7 @@ fn check_opened(
         _ => None,
     };
     let policy = signature_policy();
-    let loaded =
-        load_manifest(opened.source.as_ref(), net_target, &policy).map_err(core_fail)?;
+    let loaded = load_manifest(opened.source.as_ref(), net_target, &policy).map_err(core_fail)?;
     let m = loaded.manifest;
     let mut warnings = Vec::new();
     if net_target.is_none() {
@@ -645,7 +642,9 @@ fn find_images(root: &Path, dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
 /// USB-2: OTA trees (`manifest.json` up to 4 levels below the stick root, `xoros/`, `ota/` and
 /// `xoros/ota/`) and `*.squashfs` images (up to 2 levels below those directories).
 pub fn scan_stick(backend: &dyn SystemBackend, stick: &Stick) -> Result<Vec<StickItem>, String> {
-    let g = backend.mount_stick(stick, false).map_err(|e| e.to_string())?;
+    let g = backend
+        .mount_stick(stick, false)
+        .map_err(|e| e.to_string())?;
     let root = g.path().to_path_buf();
     let mut trees: Vec<(PathBuf, Manifest)> = Vec::new();
     let mut images: Vec<PathBuf> = Vec::new();
@@ -795,7 +794,11 @@ fn slot_err(backend: &dyn SystemBackend, slot: Slot, e: xoros_core::Error) -> Ta
         xoros_core::Error::Cancelled => TaskFailure::Cancelled,
         other => {
             let note = disabled_note(backend, &[slot]);
-            TaskFailure::Error(format!("{}: {other}\n{note}", slot.name()).trim().to_string())
+            TaskFailure::Error(
+                format!("{}: {other}\n{note}", slot.name())
+                    .trim()
+                    .to_string(),
+            )
         }
     }
 }
@@ -831,7 +834,10 @@ fn verify_written(
             )))
         }
         Err(e) => {
-            notes.push(format!("{}: cannot read xoros.env to check it: {e}", slot.name()));
+            notes.push(format!(
+                "{}: cannot read xoros.env to check it: {e}",
+                slot.name()
+            ));
             Ok(())
         }
     }
@@ -962,10 +968,7 @@ pub fn run_update(
             Err(e) => notes.push(format!("Stick {}: {e}", stick.id)),
         }
     }
-    let first_name = reports
-        .first()
-        .map(|(s, _)| s.name())
-        .unwrap_or_default();
+    let first_name = reports.first().map(|(s, _)| s.name()).unwrap_or_default();
     notes.push(format!(
         "{first_name} is first in the boot order. Reboot into it with Power -> Reboot into slot."
     ));

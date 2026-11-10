@@ -54,7 +54,8 @@ fn main() -> ExitCode {
         | Command::Boot(_)
         | Command::Power(_)
         | Command::Settings(_)
-        | Command::Stick(_) => {}
+        | Command::Stick(_)
+        | Command::Admin(_) => {}
     }
 
     let backend = match make_backend(sim_dir(opts.sim)) {
@@ -72,6 +73,8 @@ fn main() -> ExitCode {
 
     // CFG-1: settings from the overlay partition (defaults when it is missing or broken).
     xoros_rescue_shell::settings::install(xoros_rescue_shell::settings::load(backend.as_ref()));
+    // SEC-*: admin password / legacy PIN, after the settings (the PIN lives there).
+    xoros_rescue_shell::access::reload(backend.as_ref());
     let app = App::new(backend);
     match opts.command {
         Command::Status { json, hash } => match run_status(&app, json, hash) {
@@ -89,6 +92,7 @@ fn main() -> ExitCode {
         Command::Boot(args) => exit(cli_admin::run_boot(&app, &args)),
         Command::Power(args) => exit(cli_admin::run_power(&app, &args)),
         Command::Settings(args) => exit(cli_admin::run_settings(&app, &args)),
+        Command::Admin(args) => exit(cli_admin::run_admin(&app, &args)),
         Command::Stick(args) => exit(cli_admin::run_stick(&app, &args)),
         _ => match ui::run(app) {
             Ok(()) => ExitCode::SUCCESS,

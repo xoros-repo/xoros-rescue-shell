@@ -14,9 +14,9 @@ use super::http::http_options;
 use super::info::{host_addresses, interfaces_from_sysfs};
 use super::time::{build_time, format_utc};
 use super::NetEnv;
-use xoros_core::net::{connectivity_check, CheckOptions, CheckResult, CheckStatus, CheckStep};
 use crate::cmd;
 use crate::tasks::CancelToken;
+use xoros_core::net::{connectivity_check, CheckOptions, CheckResult, CheckStatus, CheckStep};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -105,7 +105,10 @@ fn gateway_reachable(env: &NetEnv, gw: Ipv4Addr) -> (StepStatus, String) {
             Err(e) => {
                 // ICMP may be filtered: fall through to ARP.
                 if arp_after_probe(env, gw) {
-                    (StepStatus::Pass, format!("{gw} in ARP table (no ping answer)"))
+                    (
+                        StepStatus::Pass,
+                        format!("{gw} in ARP table (no ping answer)"),
+                    )
                 } else {
                     (StepStatus::Fail, format!("{gw}: {e}"))
                 }
@@ -161,7 +164,10 @@ pub fn run(
             .map(|i| i.name.as_str())
             .collect();
         if up.is_empty() {
-            (StepStatus::Fail, "no interface has a carrier (cable / Wi-Fi?)".into())
+            (
+                StepStatus::Fail,
+                "no interface has a carrier (cable / Wi-Fi?)".into(),
+            )
         } else {
             (StepStatus::Pass, format!("carrier on {}", up.join(", ")))
         }
@@ -183,7 +189,10 @@ pub fn run(
             }
         }
         if list.is_empty() {
-            (StepStatus::Fail, "no usable address (DHCP not answered?)".into())
+            (
+                StepStatus::Fail,
+                "no usable address (DHCP not answered?)".into(),
+            )
         } else {
             (StepStatus::Pass, list.join(", "))
         }
@@ -274,7 +283,10 @@ pub fn step_line(s: &Step) -> String {
 
 pub fn report_text(steps: &[Step]) -> String {
     let mut t: String = steps.iter().map(|s| step_line(s) + "\n").collect();
-    let failed = steps.iter().filter(|s| s.status == StepStatus::Fail).count();
+    let failed = steps
+        .iter()
+        .filter(|s| s.status == StepStatus::Fail)
+        .count();
     t.push_str(&if failed == 0 {
         "\nAll checks passed.\n".to_string()
     } else {
@@ -311,7 +323,8 @@ mod tests {
             parse_default_gateways(route),
             vec![("eth0".to_string(), Ipv4Addr::new(192, 168, 1, 1))]
         );
-        let arp = "IP address       HW type     Flags       HW address            Mask     Device\n\
+        let arp =
+            "IP address       HW type     Flags       HW address            Mask     Device\n\
                    192.168.1.1      0x1         0x2         aa:bb:cc:dd:ee:ff     *        eth0\n\
                    192.168.1.9      0x1         0x0         00:00:00:00:00:00     *        eth0\n";
         assert!(arp_complete(arp, Ipv4Addr::new(192, 168, 1, 1)));

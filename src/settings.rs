@@ -44,8 +44,24 @@ pub const KEYS: &[&str] = &[
     "http_proxy",
     "ntp_servers",
     "theme",
+    "admin_idle_timeout",
     "pin_hash",
 ];
+
+/// Keys the user can show and set (`pin_hash` only through the PIN functions).
+pub const USER_KEYS: &[&str] = &[
+    "ota_base_url",
+    "require_signature",
+    "trusted_keys",
+    "http_proxy",
+    "ntp_servers",
+    "theme",
+    "admin_idle_timeout",
+];
+
+/// SEC-2: idle timeout of an admin session in seconds (default, minimum).
+pub const DEFAULT_ADMIN_IDLE_TIMEOUT: u64 = 300;
+pub const MIN_ADMIN_IDLE_TIMEOUT: u64 = 30;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Settings {
@@ -57,6 +73,8 @@ pub struct Settings {
     pub http_proxy: String,
     pub ntp_servers: Vec<String>,
     pub theme: String,
+    /// SEC-2: seconds without a key press before an admin session locks.
+    pub admin_idle_timeout: u64,
     /// CFG-2: `sha256i:<rounds>:<salt hex>:<hash hex>`; empty = no PIN.
     #[serde(skip_serializing)]
     pub pin_hash: String,
@@ -71,6 +89,7 @@ impl Default for Settings {
             http_proxy: DEFAULT_HTTP_PROXY.to_string(),
             ntp_servers: DEFAULT_NTP_SERVERS.iter().map(|s| s.to_string()).collect(),
             theme: "default".to_string(),
+            admin_idle_timeout: DEFAULT_ADMIN_IDLE_TIMEOUT,
             pin_hash: String::new(),
         }
     }
@@ -83,6 +102,7 @@ impl Default for Settings {
 enum Value {
     Str(String),
     Bool(bool),
+    Int(u64),
     List(Vec<String>),
 }
 
@@ -175,6 +195,12 @@ fn parse_value(text: &str) -> Result<Value, String> {
         "true" => return Ok(Value::Bool(true)),
         "false" => return Ok(Value::Bool(false)),
         _ => {}
+    }
+    if !t.is_empty() && t.bytes().all(|b| b.is_ascii_digit()) {
+        return t
+            .parse()
+            .map(Value::Int)
+            .map_err(|_| format!("number out of range: {t}"));
     }
     if t.starts_with('"') || t.starts_with('\'') {
         let (v, rest) = parse_string(t)?;
@@ -307,7 +333,11 @@ impl Settings {
             ("ntp_servers", Value::List(v)) => self.ntp_servers = v,
             ("theme", Value::Str(v)) => self.theme = v,
             ("pin_hash", Value::Str(v)) => self.pin_hash = v,
+            ("admin_idle_timeout", Value::Int(v)) => {
+                self.admin_idle_timeout = v.max(MIN_ADMIN_IDLE_TIMEOUT)
+            }
             ("require_signature", _) => return Err(want("true or false")),
+            ("admin_idle_timeout", _) => return Err(want("a number of seconds")),
             ("trusted_keys" | "ntp_servers", _) => return Err(want("a list of strings")),
             (k, _) if KEYS.contains(&k) => return Err(want("a string")),
             _ => return Err("unknown key (ignored)".into()),
@@ -368,6 +398,11 @@ impl Settings {
         let _ = writeln!(t, "http_proxy = {}", quote(&self.http_proxy));
         let _ = writeln!(t, "ntp_servers = {}", list(&self.ntp_servers));
         let _ = writeln!(t, "theme = {}", quote(&self.theme));
+        let _ = writeln!(
+            t,
+            "admin_idle_timeout = {}     # seconds without a key press before an admin session locks",
+            self.admin_idle_timeout
+        );
         if !self.pin_hash.is_empty() {
             let _ = writeln!(
                 t,
@@ -388,6 +423,7 @@ impl Settings {
             "http_proxy" => self.http_proxy.clone(),
             "ntp_servers" => list(&self.ntp_servers),
             "theme" => self.theme.clone(),
+            "admin_idle_timeout" => self.admin_idle_timeout.to_string(),
             "pin" => if self.pin_enabled() { "set" } else { "off" }.to_string(),
             _ => return None,
         })
@@ -448,11 +484,28 @@ impl Settings {
                 }
                 next.theme = input.to_string();
             }
-            "pin" | "pin_hash" => return Err("Use 'set-pin' / 'clear-pin' for the PIN.".into()),
+            "admin_idle_timeout" => {
+                let v: u64 = input.parse().map_err(|_| {
+                    format!("admin_idle_timeout: '{input}' is not a number of seconds.")
+                })?;
+                if v < MIN_ADMIN_IDLE_TIMEOUT {
+                    return Err(format!(
+                        "admin_idle_timeout: at least {MIN_ADMIN_IDLE_TIMEOUT} seconds."
+                    ));
+                }
+                next.admin_idle_timeout = v;
+            }
+            "pin" | "pin_hash" => {
+                return Err(
+                    "The PIN was replaced by the admin password ('admin set-password'); \
+                            'settings clear-pin' removes an old PIN."
+                        .into(),
+                )
+            }
             other => {
                 return Err(format!(
                     "Unknown setting '{other}' (known: {}).",
-                    KEYS[..6].join(", ")
+                    USER_KEYS.join(", ")
                 ))
             }
         }

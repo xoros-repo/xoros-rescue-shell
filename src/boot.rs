@@ -54,6 +54,23 @@ pub fn recreate_grubenv(b: &dyn SystemBackend) -> Result<()> {
 
 /// Set ROTATION in grubenv and apply it to the running console (ROT-1). Returns a note
 /// for the user about the immediate application.
+/// Boot menu visibility (`MENU_MODE`, BOOT-9), straight from grubenv.
+pub fn menu_mode(b: &dyn SystemBackend) -> Result<xoros_core::boot::MenuMode> {
+    let bp = b.boot_partition()?;
+    bp.read()
+        .map(|st| st.menu_mode())
+        .map_err(crate::backend::core::core_err)
+}
+
+/// Set the boot menu visibility (`MENU_MODE`, BOOT-9, SEC-7).
+pub fn set_menu_mode(b: &dyn SystemBackend, mode: xoros_core::boot::MenuMode) -> Result<()> {
+    logged(&format!("set MENU_MODE={}", mode.value()), || {
+        let bp = b.boot_partition()?;
+        bp.update_checked(|st| st.set_menu_mode(mode))
+            .map_err(crate::backend::core::core_err)
+    })
+}
+
 pub fn set_rotation(b: &dyn SystemBackend, rotation: u8) -> Result<String> {
     logged(&format!("set ROTATION={rotation}"), || {
         b.set_rotation(rotation)
@@ -72,7 +89,10 @@ pub fn set_rotation(b: &dyn SystemBackend, rotation: u8) -> Result<String> {
                 Ok("Applied to the console now.".into())
             }
             Ok(now) => {
-                log::warn!("console rotation is still {} after writing {rotation}", now.trim());
+                log::warn!(
+                    "console rotation is still {} after writing {rotation}",
+                    now.trim()
+                );
                 Ok("Applied on next boot (this kernel cannot rotate the running console).".into())
             }
             Err(e) => {

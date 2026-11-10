@@ -36,8 +36,14 @@ const F_REMEMBER: &str = "netcfg_remember";
 
 pub fn menu() -> Tree {
     Tree::new()
-        .leaf("Ethernet DHCP", dhcp)
-        .leaf("Configure", configure)
+        .leaf(
+            "Ethernet DHCP",
+            crate::ui::access::gate("network: Ethernet DHCP", dhcp),
+        )
+        .leaf(
+            "Configure",
+            crate::ui::access::gate("network: configure", configure),
+        )
         .leaf("Test", test)
         .leaf("Speed test", |s| {
             pop_to_base(s);
@@ -46,11 +52,23 @@ pub fn menu() -> Tree {
                 crate::hwtest::TestRequest::NetSpeed(crate::net::speed::SpeedOptions::default()),
             );
         })
-        .leaf("Date and time", date_time)
+        .leaf(
+            "Date and time",
+            crate::ui::access::gate("date and time", date_time),
+        )
         .delimiter()
-        .leaf("Remembered settings", remembered)
-        .leaf("Use in normal system", use_in_normal_system)
-        .leaf("Load from normal system", load_from_normal_system)
+        .leaf(
+            "Remembered settings",
+            crate::ui::access::gate("network: remembered settings", remembered),
+        )
+        .leaf(
+            "Use in normal system",
+            crate::ui::access::gate("network: use in normal system", use_in_normal_system),
+        )
+        .leaf(
+            "Load from normal system",
+            crate::ui::access::gate("network: load from normal system", load_from_normal_system),
+        )
 }
 
 fn env(s: &mut Ui) -> Option<NetEnv> {
@@ -442,13 +460,7 @@ fn read_form(s: &mut Ui, ifname: &str, is_wifi: bool) -> (ConfigInput, Option<St
     )
 }
 
-fn submit_form(
-    s: &mut Ui,
-    ifname: &str,
-    is_wifi: bool,
-    existing: Option<&NetConfig>,
-    apply: bool,
-) {
+fn submit_form(s: &mut Ui, ifname: &str, is_wifi: bool, existing: Option<&NetConfig>, apply: bool) {
     let (mut input, country) = read_form(s, ifname, is_wifi);
     if let Some(cc) = &country {
         if !wifi::valid_country(cc) {
@@ -493,7 +505,10 @@ where
         .map(|(i, ssid)| format!("'{ssid}' ({i})"))
         .collect::<Vec<_>>()
         .join(", ");
-    let text = format!("WPA3 network(s): {names}\n\n{}", texts::NET_SAE_STORE_QUESTION);
+    let text = format!(
+        "WPA3 network(s): {names}\n\n{}",
+        texts::NET_SAE_STORE_QUESTION
+    );
     let then = std::sync::Arc::new(then);
     let t2 = std::sync::Arc::clone(&then);
     s.add_layer(closable(
@@ -728,8 +743,12 @@ fn remember_job_run(s: &mut Ui, remember: bool, store_sae: bool) {
         move |app, _ctx| {
             let env = NetEnv::for_backend(app.backend.as_ref());
             if remember {
-                let r = profile::remember_with(app.backend.as_ref(), &profile::load_state(&env), store_sae)
-                    .map_err(TaskFailure::Error)?;
+                let r = profile::remember_with(
+                    app.backend.as_ref(),
+                    &profile::load_state(&env),
+                    store_sae,
+                )
+                .map_err(TaskFailure::Error)?;
                 Ok(r.text())
             } else {
                 Ok(
@@ -843,18 +862,17 @@ fn pick_nm_profile(s: &mut Ui, p: &nm::NmProfile) {
             return;
         }
     };
-    let open_form =
-        move |s: &mut Ui, ifname: &str, wireless: bool| match crate::cli_net::import_as(
-            c.clone(),
-            ifname,
-        ) {
-            Ok(imported) => {
-                let input = profile::input_from(&imported);
-                let country = env(s).and_then(|e| profile::load_state(&e).country);
-                config_form(s, input, wireless, Some(imported), country);
-            }
-            Err(e) => dialogs::error(s, "The connection cannot be used.", &e),
-        };
+    let open_form = move |s: &mut Ui, ifname: &str, wireless: bool| match crate::cli_net::import_as(
+        c.clone(),
+        ifname,
+    ) {
+        Ok(imported) => {
+            let input = profile::input_from(&imported);
+            let country = env(s).and_then(|e| profile::load_state(&e).country);
+            config_form(s, input, wireless, Some(imported), country);
+        }
+        Err(e) => dialogs::error(s, "The connection cannot be used.", &e),
+    };
     let Some(env) = env(s) else { return };
     match p.config.as_ref().ok().and_then(|c| c.interface.clone()) {
         Some(ifname) => {

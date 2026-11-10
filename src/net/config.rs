@@ -225,7 +225,10 @@ pub fn lease_dns(leases_dir: &Path) -> Vec<IpAddr> {
         if let Ok(text) = fs::read_to_string(&f) {
             for line in text.lines() {
                 if let Some(v) = line.strip_prefix("DNS=") {
-                    out.extend(v.split_whitespace().filter_map(|a| a.parse::<IpAddr>().ok()));
+                    out.extend(
+                        v.split_whitespace()
+                            .filter_map(|a| a.parse::<IpAddr>().ok()),
+                    );
                 }
             }
         }
@@ -340,7 +343,10 @@ mod tests {
         let f = fs::read_to_string(e.networkd_dir.join("50-xoros-rescue-eth0.network")).unwrap();
         assert!(f.contains("Name=eth0"));
         assert!(rep.text().contains("enp2s0, eth0"));
-        assert!(!e.networkd_dir.join("50-xoros-rescue-wlan0.network").exists());
+        assert!(!e
+            .networkd_dir
+            .join("50-xoros-rescue-wlan0.network")
+            .exists());
     }
 
     #[test]
@@ -367,7 +373,10 @@ mod tests {
             "leases/2",
             b"# This is private data.\nADDRESS=192.168.1.5\nDNS=192.168.1.1 1.1.1.1\n",
         );
-        d.write("run/resolv.conf.eth1", b"nameserver 1.1.1.1\nnameserver 8.8.8.8\n");
+        d.write(
+            "run/resolv.conf.eth1",
+            b"nameserver 1.1.1.1\nnameserver 8.8.8.8\n",
+        );
         let v = refresh_resolv_conf(&e).unwrap();
         let txt: Vec<String> = v.iter().map(|i| i.to_string()).collect();
         assert_eq!(txt, ["192.168.1.1", "1.1.1.1", "8.8.8.8"]);
