@@ -2,7 +2,7 @@
 //!
 //! Implementations:
 //! - [`core::CoreBackend`]: the real system through the shared crate `xoros-core`
-//!   (`../xor/REQUIREMENTS.md`, XC-21..45); see its module docs for the method mapping;
+//!   (`../xoros-xor-tool/REQUIREMENTS.md`, XC-21..45); see its module docs for the method mapping;
 //! - [`sim::SimBackend`]: simulation mode (SIM-1), state in `<dir>/sim.json`;
 //! - [`unavailable::UnavailableBackend`]: fallback when the boot disk/layout cannot be
 //!   detected; every device operation fails with that reason.

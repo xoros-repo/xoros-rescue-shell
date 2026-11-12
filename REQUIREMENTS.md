@@ -1,7 +1,7 @@
 # XorOS Rescue Shell: Technical Implementation Requirements
 
-Status: draft 3 (2026-11-10; draft 2: 2026-10-27). Target app: `xoros-rescue-shell` from github.com/xoros-repo/xoros-rescue-shell.
-Related: `../xor/REQUIREMENTS.md` (shared crate `xoros-core` and the `xor` tool, see [section 9.1](#91-shared-crate-xoros-core)).
+Status: draft 4 (2026-11-12; draft 3: 2026-11-10; draft 2: 2026-10-27). Target app: `xoros-rescue-shell` from github.com/xoros-repo/xoros-rescue-shell.
+Related: `../xoros-xor-tool/REQUIREMENTS.md` (shared crate `xoros-core` and the `xor` tool, see [section 9.1](#91-shared-crate-xoros-core)).
 
 This document contains everything needed to implement the rescue shell without access to the `xoros-distro`
 repository: the device layout, the bootloader contract, the OTA format, the runtime environment of the rescue system
@@ -213,7 +213,7 @@ Storage (one format, read by GRUB and by the rescue shell):
 - **Device password**: file `EFI/BOOT/admin.cfg` on the `boot` partition, exactly one line
   `password_pbkdf2 admin grub.pbkdf2.sha512.<iterations>.<salt hex>.<hash hex>` (the format of
   `grub-mkpasswd-pbkdf2`, PBKDF2-HMAC-SHA512) and a trailing newline, nothing else. grub.cfg runs it with `source`, the
-  rescue shell parses it (`XC-37` in `../xor/REQUIREMENTS.md`). Written only by an admin session (`SEC-4`) or by root
+  rescue shell parses it (`XC-37` in `../xoros-xor-tool/REQUIREMENTS.md`). Written only by an admin session (`SEC-4`) or by root
   in the normal system (`xor admin`): write a temporary file in `EFI/BOOT/`, `fsync`, rename over `admin.cfg`, `sync`.
 - **Build default**: optional `XOROS_ADMIN_PASSWORD_HASH` (the `grub.pbkdf2.sha512...` string, never the clear text
   password) set in the distro build (`DIST-12`). It is written into grub.cfg on the boot partition and into
@@ -366,6 +366,13 @@ Server layout (default base URL `https://ota.xoros.io`, configurable `CFG-1`):
 - `type` is `rootfs`, `rescue` or `boot`. Chunk file names are `<image index>_<chunk index>_<first 6 hex of chunk sha256>.chunk`.
   The last chunk may be smaller than `chunk_size`. Image bytes = concatenation of chunks in `offset` order.
 - The rootfs image is a squashfs (no partition table), written at offset 0 of the slot partition.
+- A manifest MAY list several builds. The images of one build (`rootfs` and `rescue`) share its `build_timestamp`.
+  The server keeps the two newest builds of each `<VERSION>/<MACHINE>/<SUFFIX>`, so a device can go back one build
+  (`OTA-3`); publishing is described in `DIST-16`. Image `index` values are unique within a manifest but are not
+  contiguous and need not start at 0 (older builds are removed); the app MUST identify an image by its `index` and
+  `sha256`, never by its position in `images`.
+- A chunk of a build that was removed from the server while it was being downloaded fails with HTTP 404: a download
+  error (`OTA-5`). Checking again lists the builds that are available now.
 
 Requirements:
 
@@ -702,7 +709,7 @@ open.
 ## 8. Non-functional requirements
 
 - **NF-1 (P1)** Rust edition 2021. The distro builds with **Rust 1.95** or newer (`meta-rust-bin`, `cargo_bin`
-  class, `XD-7` in `../xor/REQUIREMENTS.md`), so the MSRV is 1.95 and `Cargo.lock` MUST pin crate versions that build
+  class, `XD-7` in `../xoros-xor-tool/REQUIREMENTS.md`), so the MSRV is 1.95 and `Cargo.lock` MUST pin crate versions that build
   with 1.95 (`cargo +1.95 build` in CI). Raised from 1.78 together with `xoros-core` (`ureq` 3, `k256` 0.14, `sha2`
   0.11 need Rust 1.85+). Crates are fetched by cargo during the Yocto build; no git dependencies that need SSH.
 - **NF-2 (P1)** Avoid C dependencies that need extra Yocto recipes: TLS via `rustls` with the system CA bundle
@@ -724,7 +731,7 @@ open.
 ### 9.1 Shared crate `xoros-core`
 
 The OTA, boot-control and device logic is shared with the `xor` command-line tool of the normal system through the
-library crate **`xoros-core`**, specified in `../xor/REQUIREMENTS.md` (IDs `XC-*`). The rescue shell MUST use it
+library crate **`xoros-core`**, specified in `../xoros-xor-tool/REQUIREMENTS.md` (IDs `XC-*`). The rescue shell MUST use it
 instead of re-implementing these parts, so manifests, signatures, grubenv handling and the write guard behave the same
 in both tools and are tested once.
 
@@ -844,7 +851,7 @@ described in the corresponding requirement.
 
 | ID | Change | Needed by | Without it |
 |---|---|---|---|
-| DIST-1 | Done. Run `xor boot ok` (today `mark-boot-ok.sh`) automatically when the normal system has booted successfully: `xoros-boot-ok.service`, see `XD-3` in `../xor/REQUIREMENTS.md`. | `BOOT-*` | Counters grow on every normal boot; device falls into rescue after 6 boots. Health checks: executables in `/etc/xoros/boot-ok.d/` must pass first (`XD-3`). |
+| DIST-1 | Done. Run `xor boot ok` (today `mark-boot-ok.sh`) automatically when the normal system has booted successfully: `xoros-boot-ok.service`, see `XD-3` in `../xoros-xor-tool/REQUIREMENTS.md`. | `BOOT-*` | Counters grow on every normal boot; device falls into rescue after 6 boots. Health checks: executables in `/etc/xoros/boot-ok.d/` must pass first (`XD-3`). |
 | DIST-2 | Done. Add `smartmontools` and `nvme-cli` to `xoros-rescue-image`. | `TST-7` | Only sysfs health info. |
 | DIST-3 | Done. Make `/etc/resolv.conf` in the rescue image a symlink to `/run/xoros-rescue/resolv.conf` (or add `systemd-resolved`). | `NET-3` | Only the app resolves names; tools in the subshell do not. |
 | DIST-4 | Done. Rescue kernel: `CONFIG_EXFAT_FS`, `CONFIG_VFAT_FS`, `CONFIG_NLS_CODEPAGE_437`, `CONFIG_NLS_ISO8859_1`, `CONFIG_NLS_UTF8`, USB mass storage (check they are built in or installed as modules). Add `dosfstools` to the x86 rescue image. | `USB-1`, `BAK-*` | exFAT sticks not supported. |
@@ -859,6 +866,7 @@ described in the corresponding requirement.
 | DIST-13 | Raspberry Pi: U-Boot autoboot cannot be interrupted (`CONFIG_BOOTDELAY=-2`, fragment `xoros-no-autoboot-prompt.cfg`), so the U-Boot shell is not reachable from the console. U-Boot is shared by all images of a build, so this is build wide: `XOROS_UBOOT_AUTOBOOT_PROMPT = "1"` in `local.conf` keeps the prompt for development builds. | 4.7 | The U-Boot shell bypasses GRUB and the password. |
 | DIST-14 | Production images (`xoros-image-stable` and anything shipped to customers; devel/audit keep their debug access, `XOROS_CONSOLE_LOCKDOWN = "0"`): root locked (the build fails when the image features would give root an empty password or a password-less login), no `empty-root-password`/`allow-empty-password`/`allow-root-login`/`debug-tweaks`, no autologin getty; Weston `[keyboard] vt-switching=false` and no terminal or launcher in the kiosk session; `kernel.sysrq=0` (rescue image too); `sshd` key-only. | 4.7 | The normal system is the easier way in: a console user gets a root shell there. |
 | DIST-15 | Deployment guide (documentation, not the image): x86 UEFI setup password and boot only from the internal disk (USB/PXE boot off or after the disk); on the Pi the EEPROM boot order cannot be locked, so USB ports and the SD slot need physical protection where this matters. | 4.7 | Booting another medium bypasses everything above. |
+| DIST-16 | OTA artifacts are published to a Cloudflare R2 bucket served at `https://ota.xoros.io` (layout as in 6.3, unchanged for devices), replacing the Cloudflare Pages project, whose every deployment replaced the whole site with the board just built. Publishing merges the new build into the published `manifest.json` and keeps the two newest builds per `<VERSION>/<MACHINE>/<SUFFIX>` (`XD-8` in `../xoros-xor-tool/REQUIREMENTS.md`). | `OTA-3` (downgrade to the previous build) | Only the newest build of one machine is online; no way back over the network. |
 
 ## 13. Current state of the app (for orientation)
 
@@ -880,3 +888,5 @@ The `models` module holds an older manifest shape; replace it with the one in 6.
 5. **M5 (P2):** access protection: admin session and password management (`SEC-*`), `MENU_MODE` (`BOOT-9`), on top
    of `xoros-core` C4 (`XC-37`, `XC-38`). Distro: `DIST-11`..`DIST-14` (grub.cfg, build default, U-Boot, image
    hardening), `DIST-15` as documentation.
+6. **M6 (P2, distro):** OTA publishing to R2 with the previous build kept (`DIST-16`), on top of `xoros-core` C5
+   (`XC-82`, `XT-12`). No app change: the app already lists several builds and offers a downgrade (`OTA-3`).

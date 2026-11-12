@@ -11,7 +11,7 @@ for Yocto/OpenEmbedded via `cargo-bitbake` recipes.
 
 ## Status
 
-Version `0.1.1-2`, milestones M1 and M2 (partly) of `xoros-distro/.../rescue-shell/REQUIREMENTS.md` (IDs in brackets):
+Version `0.1.1-2`, milestones M1 and M2 (partly) of [REQUIREMENTS.md](REQUIREMENTS.md) (IDs in brackets):
 
 - **Status** screen with the reason for rescue, both slots, rescue image check, persistent partitions,
   network and time [SYS-1]; hardware details [SYS-2]; storage [SYS-3].
