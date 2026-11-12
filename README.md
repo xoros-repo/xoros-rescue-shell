@@ -45,8 +45,8 @@ through the `SystemBackend` trait in `src/backend/`: `CoreBackend` on a device (
 `xoros-core`), `SimBackend` in simulation mode. If the boot disk or the XorOS layout cannot be
 detected, the app starts anyway and every device function reports that error.
 
-`xoros-core` is currently a path dependency on a sibling checkout (`../xoros-xor-tool`); the
-release form is the pinned SSH git dependency noted in `Cargo.toml` (CORE-1).
+`xoros-core` is the pinned SSH git dependency in `Cargo.toml` (CORE-1); for development against a
+sibling checkout (`../xoros-xor-tool`) use the commented path form there.
 
 ## Usage
 
