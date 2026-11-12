@@ -55,7 +55,8 @@ fn main() -> ExitCode {
         | Command::Power(_)
         | Command::Settings(_)
         | Command::Stick(_)
-        | Command::Admin(_) => {}
+        | Command::Admin(_)
+        | Command::Dev(_) => {}
     }
 
     let backend = match make_backend(sim_dir(opts.sim)) {
@@ -93,6 +94,7 @@ fn main() -> ExitCode {
         Command::Power(args) => exit(cli_admin::run_power(&app, &args)),
         Command::Settings(args) => exit(cli_admin::run_settings(&app, &args)),
         Command::Admin(args) => exit(cli_admin::run_admin(&app, &args)),
+        Command::Dev(args) => exit(cli_admin::run_dev(&app, &args)),
         Command::Stick(args) => exit(cli_admin::run_stick(&app, &args)),
         _ => match ui::run(app) {
             Ok(()) => ExitCode::SUCCESS,

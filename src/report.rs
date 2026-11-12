@@ -90,6 +90,13 @@ pub fn status_text(st: &SystemStatus) -> String {
     if st.simulation {
         let _ = writeln!(out, "Backend: {}", ellipsize(&st.backend, 66));
     }
+    if !st.developer.is_empty() {
+        let _ = writeln!(
+            out,
+            "DEVELOPER OVERRIDE: {}",
+            ellipsize(&st.developer.join(", "), 60)
+        );
+    }
     let _ = writeln!(out, "Why rescue: {}", st.reason.text);
     if st.grubenv_broken {
         let _ = writeln!(out, "  grubenv is broken: use Boot -> Recreate grubenv.");

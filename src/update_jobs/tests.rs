@@ -490,5 +490,114 @@ fn signature_policy_from_settings() {
     let mut bytes = fs::read(&m).expect("read");
     bytes.push(b'\n');
     fs::write(&m, bytes).expect("write");
-    assert!(load(&s, &[pk]).is_err());
+    assert!(load(&s, std::slice::from_ref(&pk)).is_err());
+
+    // DVM-7: skip_signature skips the check, but only while the developer menu is shown.
+    s.require_signature = true;
+    s.skip_signature = true;
+    assert!(load(&s, &[]).is_err(), "menu hidden: still checked");
+    s.developer_menu = true;
+    assert_eq!(load(&s, &[]).expect("skipped"), SignatureStatus::Skipped);
+    assert_eq!(
+        signature_text(&SignatureStatus::Skipped),
+        "Signature check OFF (developer menu)"
+    );
+}
+
+/// DVM-5: network defaults from the overrides, else from the newest slot.
+#[test]
+fn network_defaults_with_developer_overrides() {
+    use crate::settings::Settings;
+    let f = fixture();
+    let d = device_target(f.b.as_ref());
+    let mut s = Settings::default();
+    let n = d.network_defaults(&s);
+    assert_eq!(
+        (n.version.as_deref(), n.suffix, n.overridden),
+        (Some("1.0"), Some(Suffix::Devel), false)
+    );
+    s.ota_suffix = "nightly".into();
+    s.ota_version = "1.1".into();
+    assert!(!d.network_defaults(&s).overridden, "menu hidden: ignored");
+    s.developer_menu = true;
+    let n = d.network_defaults(&s);
+    assert_eq!(
+        (n.version.as_deref(), n.suffix, n.overridden),
+        (Some("1.1"), Some(Suffix::Nightly), true)
+    );
+    s.ota_version.clear();
+    let n = d.network_defaults(&s);
+    assert_eq!(
+        (n.version.as_deref(), n.suffix),
+        (Some("1.0"), Some(Suffix::Nightly))
+    );
+}
+
+/// DVM-2: the flavor list from the server's index, and the fallback without one.
+#[test]
+fn flavor_list_from_index_and_fallback() {
+    use xoros_core::index::{Flavor, FlavorIndex};
+    let f = fixture();
+    let root = f.d.path().join("ota");
+    let srv = serve(&root, None);
+
+    // no index on the server: the four suffixes of the installed version, not checked
+    let l = crate::devmenu::load_flavors(f.b.as_ref(), &srv.base).expect("fallback");
+    assert!(matches!(l.source, crate::devmenu::ListSource::Fallback(_)));
+    assert_eq!(l.rows.len(), 4);
+    assert!(l
+        .rows
+        .iter()
+        .any(|r| r.installed && r.suffix == Suffix::Devel));
+
+    let index = FlavorIndex {
+        distro: "xoros".into(),
+        machine: "qemux86-64".into(),
+        flavors: vec![
+            Flavor {
+                version: "1.0".into(),
+                suffix: Suffix::Devel,
+                builds: vec![BuildTimestamp::parse(TS).expect("ts")],
+                signed: false,
+            },
+            Flavor {
+                version: "1.1".into(),
+                suffix: Suffix::Nightly,
+                builds: vec![BuildTimestamp::parse(TS).expect("ts")],
+                signed: true,
+            },
+        ],
+    };
+    fs::create_dir_all(root.join("index")).expect("dir");
+    fs::write(root.join("index/qemux86-64.json"), index.to_json()).expect("index");
+    let l = crate::devmenu::load_flavors(f.b.as_ref(), &srv.base).expect("index");
+    assert_eq!(l.source, crate::devmenu::ListSource::Index);
+    assert_eq!(l.machine, "qemux86-64");
+    let got: Vec<_> = l
+        .rows
+        .iter()
+        .map(|r| {
+            (
+                r.version.as_str(),
+                r.suffix,
+                r.builds,
+                r.signed,
+                r.installed,
+            )
+        })
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            ("1.0", Suffix::Devel, Some(1), Some(false), true),
+            ("1.1", Suffix::Nightly, Some(1), Some(true), false),
+        ]
+    );
+    assert!(lock(&srv.requests)
+        .iter()
+        .any(|u| u == "/index/qemux86-64.json"));
+    assert!(l.text().contains("1.1    nightly"), "{}", l.text());
+
+    // an invalid server URL is an error, not a fallback
+    assert!(crate::devmenu::load_flavors(f.b.as_ref(), "ftp://x").is_err());
 }

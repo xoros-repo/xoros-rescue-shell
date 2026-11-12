@@ -17,6 +17,8 @@ use std::sync::RwLock;
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use std::str::FromStr;
+use xoros_core::env::Suffix;
 use xoros_core::signature::PublicKey;
 use xoros_core::source::SignaturePolicy;
 
@@ -45,6 +47,10 @@ pub const KEYS: &[&str] = &[
     "ntp_servers",
     "theme",
     "admin_idle_timeout",
+    "developer_menu",
+    "ota_version",
+    "ota_suffix",
+    "skip_signature",
     "pin_hash",
 ];
 
@@ -57,6 +63,19 @@ pub const USER_KEYS: &[&str] = &[
     "ntp_servers",
     "theme",
     "admin_idle_timeout",
+    "developer_menu",
+    "ota_version",
+    "ota_suffix",
+    "skip_signature",
+];
+
+/// Developer settings (DVM-*): written to the file only when one is set, so the file of a
+/// device without the developer menu does not mention it.
+pub const DEV_KEYS: &[&str] = &[
+    "developer_menu",
+    "ota_version",
+    "ota_suffix",
+    "skip_signature",
 ];
 
 /// SEC-2: idle timeout of an admin session in seconds (default, minimum).
@@ -75,6 +94,18 @@ pub struct Settings {
     pub theme: String,
     /// SEC-2: seconds without a key press before an admin session locks.
     pub admin_idle_timeout: u64,
+    /// DVM-1: show the Developer menu.
+    #[serde(skip_serializing_if = "is_false")]
+    pub developer_menu: bool,
+    /// DVM-5: VERSION override for network updates, empty = from the slot.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub ota_version: String,
+    /// DVM-5: SUFFIX override for network updates, empty = from the slot.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub ota_suffix: String,
+    /// DVM-7: do not check `signature.json`.
+    #[serde(skip_serializing_if = "is_false")]
+    pub skip_signature: bool,
     /// CFG-2: `sha256i:<rounds>:<salt hex>:<hash hex>`; empty = no PIN.
     #[serde(skip_serializing)]
     pub pin_hash: String,
@@ -90,6 +121,10 @@ impl Default for Settings {
             ntp_servers: DEFAULT_NTP_SERVERS.iter().map(|s| s.to_string()).collect(),
             theme: "default".to_string(),
             admin_idle_timeout: DEFAULT_ADMIN_IDLE_TIMEOUT,
+            developer_menu: false,
+            ota_version: String::new(),
+            ota_suffix: String::new(),
+            skip_signature: false,
             pin_hash: String::new(),
         }
     }
@@ -328,6 +363,10 @@ impl Settings {
         match (key, value) {
             ("ota_base_url", Value::Str(v)) => self.ota_base_url = v,
             ("require_signature", Value::Bool(v)) => self.require_signature = v,
+            ("developer_menu", Value::Bool(v)) => self.developer_menu = v,
+            ("skip_signature", Value::Bool(v)) => self.skip_signature = v,
+            ("ota_version", Value::Str(v)) => self.ota_version = v,
+            ("ota_suffix", Value::Str(v)) => self.ota_suffix = v,
             ("trusted_keys", Value::List(v)) => self.trusted_keys = v,
             ("http_proxy", Value::Str(v)) => self.http_proxy = v,
             ("ntp_servers", Value::List(v)) => self.ntp_servers = v,
@@ -336,7 +375,9 @@ impl Settings {
             ("admin_idle_timeout", Value::Int(v)) => {
                 self.admin_idle_timeout = v.max(MIN_ADMIN_IDLE_TIMEOUT)
             }
-            ("require_signature", _) => return Err(want("true or false")),
+            ("require_signature" | "developer_menu" | "skip_signature", _) => {
+                return Err(want("true or false"))
+            }
             ("admin_idle_timeout", _) => return Err(want("a number of seconds")),
             ("trusted_keys" | "ntp_servers", _) => return Err(want("a list of strings")),
             (k, _) if KEYS.contains(&k) => return Err(want("a string")),
@@ -371,6 +412,25 @@ impl Settings {
                 THEMES.join(", ")
             ));
         }
+        if !self.ota_version.is_empty() && !is_safe_version(&self.ota_version) {
+            p.push(format!(
+                "ota_version: '{}' is not a version (ignored)",
+                self.ota_version
+            ));
+        }
+        if !self.ota_suffix.is_empty() && Suffix::from_str(&self.ota_suffix).is_err() {
+            p.push(format!(
+                "ota_suffix: '{}' is not stable, devel, audit or nightly (ignored)",
+                self.ota_suffix
+            ));
+        }
+        if !self.developer_menu && self.has_dev_values() {
+            p.push(
+                "developer settings (ota_version, ota_suffix, skip_signature) are ignored: \
+                 the developer menu is off"
+                    .into(),
+            );
+        }
         if !self.pin_hash.is_empty() && PinHash::parse(&self.pin_hash).is_none() {
             p.push("pin_hash: not a valid PIN hash (the PIN is off)".into());
         }
@@ -403,6 +463,12 @@ impl Settings {
             "admin_idle_timeout = {}     # seconds without a key press before an admin session locks",
             self.admin_idle_timeout
         );
+        if self.developer_menu || self.has_dev_values() {
+            let _ = writeln!(t, "developer_menu = {}", self.developer_menu);
+            let _ = writeln!(t, "ota_version = {}", quote(&self.ota_version));
+            let _ = writeln!(t, "ota_suffix = {}", quote(&self.ota_suffix));
+            let _ = writeln!(t, "skip_signature = {}", self.skip_signature);
+        }
         if !self.pin_hash.is_empty() {
             let _ = writeln!(
                 t,
@@ -424,6 +490,10 @@ impl Settings {
             "ntp_servers" => list(&self.ntp_servers),
             "theme" => self.theme.clone(),
             "admin_idle_timeout" => self.admin_idle_timeout.to_string(),
+            "developer_menu" => self.developer_menu.to_string(),
+            "ota_version" => self.ota_version.clone(),
+            "ota_suffix" => self.ota_suffix.clone(),
+            "skip_signature" => self.skip_signature.to_string(),
             "pin" => if self.pin_enabled() { "set" } else { "off" }.to_string(),
             _ => return None,
         })
@@ -446,16 +516,28 @@ impl Settings {
                 crate::net::http::check_base_url(input)?;
                 next.ota_base_url = input.trim_end_matches('/').to_string();
             }
-            "require_signature" => {
-                next.require_signature = match input {
-                    "true" | "yes" | "on" | "1" => true,
-                    "false" | "no" | "off" | "0" => false,
-                    other => {
-                        return Err(format!(
-                            "require_signature: '{other}' is not true or false."
-                        ))
-                    }
+            "require_signature" => next.require_signature = parse_bool(key, input)?,
+            "developer_menu" => {
+                next.developer_menu = parse_bool(key, input)?;
+                if !next.developer_menu {
+                    // DVM-8: a hidden menu never leaves an override behind.
+                    next.clear_dev_overrides();
                 }
+            }
+            "skip_signature" => next.skip_signature = parse_bool(key, input)?,
+            "ota_version" => {
+                if !input.is_empty() && !is_safe_version(input) {
+                    return Err(format!("ota_version: '{input}' is not a version."));
+                }
+                next.ota_version = input.to_string();
+            }
+            "ota_suffix" => {
+                if !input.is_empty() {
+                    Suffix::from_str(input).map_err(|_| {
+                        format!("ota_suffix: use stable, devel, audit or nightly, not '{input}'.")
+                    })?;
+                }
+                next.ota_suffix = input.to_string();
             }
             "trusted_keys" => {
                 let keys = list();
@@ -544,7 +626,63 @@ impl Settings {
                 )),
             }
         }
-        (SignaturePolicy::new(keys, self.require_signature), warnings)
+        let policy = SignaturePolicy::new(keys, self.require_signature)
+            .skipping(self.skip_signature_active());
+        (policy, warnings)
+    }
+
+    // --- DVM ---
+
+    /// Any developer value set (whether the menu is on or not).
+    pub fn has_dev_values(&self) -> bool {
+        !self.ota_version.is_empty() || !self.ota_suffix.is_empty() || self.skip_signature
+    }
+
+    /// DVM-8: clears `ota_version`, `ota_suffix` and `skip_signature`.
+    pub fn clear_dev_overrides(&mut self) {
+        self.ota_version.clear();
+        self.ota_suffix.clear();
+        self.skip_signature = false;
+    }
+
+    /// DVM-5: the VERSION override in effect.
+    pub fn dev_version(&self) -> Option<&str> {
+        Some(self.ota_version.as_str())
+            .filter(|v| self.developer_menu && !v.is_empty() && is_safe_version(v))
+    }
+
+    /// DVM-5: the SUFFIX override in effect.
+    pub fn dev_suffix(&self) -> Option<Suffix> {
+        if !self.developer_menu {
+            return None;
+        }
+        Suffix::from_str(&self.ota_suffix).ok()
+    }
+
+    /// DVM-7: the signature check is skipped.
+    pub fn skip_signature_active(&self) -> bool {
+        self.developer_menu && self.skip_signature
+    }
+
+    /// DVM-6: the overrides in effect, as `key = value` texts (empty: none).
+    pub fn dev_overrides(&self) -> Vec<String> {
+        if !self.developer_menu {
+            return Vec::new();
+        }
+        let mut v = Vec::new();
+        if let Some(x) = self.dev_version() {
+            v.push(format!("version {x}"));
+        }
+        if let Some(x) = self.dev_suffix() {
+            v.push(format!("suffix {x}"));
+        }
+        if self.skip_signature {
+            v.push("signature check off".into());
+        }
+        if self.ota_base_url.trim_end_matches('/') != DEFAULT_OTA_BASE_URL {
+            v.push(format!("server {}", self.ota_base_url));
+        }
+        v
     }
 
     // --- CFG-2 ---
@@ -570,6 +708,28 @@ impl Settings {
             Some(h) => h.matches(pin),
         }
     }
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+fn parse_bool(key: &str, input: &str) -> Result<bool, String> {
+    match input {
+        "true" | "yes" | "on" | "1" => Ok(true),
+        "false" | "no" | "off" | "0" => Ok(false),
+        other => Err(format!("{key}: '{other}' is not true or false.")),
+    }
+}
+
+/// A VERSION usable in an OTA path (`1.0`): letters, digits, `.`, `_`, `-`; not `.`/`..`.
+pub fn is_safe_version(v: &str) -> bool {
+    !v.is_empty()
+        && v != "."
+        && v != ".."
+        && v.len() <= 32
+        && v.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-')
 }
 
 pub fn check_pin_format(pin: &str) -> Result<(), String> {
@@ -1056,5 +1216,45 @@ mod tests {
         let st = load(&b);
         assert_eq!(st.origin, Origin::File);
         assert_eq!(st.settings.ntp_servers, vec!["ntp.example".to_string()]);
+    }
+
+    /// DVM-1, DVM-8, DVM-10: developer keys in the file, `set` checks, hiding clears overrides.
+    #[test]
+    fn developer_settings() {
+        let d = Settings::default();
+        let toml = d.to_toml();
+        assert!(!toml.contains("developer_menu"), "{toml}");
+
+        let mut s = d.clone();
+        s.set("developer_menu", "true").unwrap();
+        s.set("ota_version", "1.1").unwrap();
+        s.set("ota_suffix", "nightly").unwrap();
+        s.set("skip_signature", "on").unwrap();
+        assert!(s.set("ota_suffix", "beta").is_err());
+        assert!(s.set("ota_version", "../1").is_err());
+        assert!(s.set("skip_signature", "maybe").is_err());
+        let (back, w) = Settings::parse(&s.to_toml());
+        assert_eq!(back, s);
+        assert!(w.is_empty(), "{w:?}");
+        assert_eq!(back.dev_suffix(), Some(Suffix::Nightly));
+        assert_eq!(back.dev_version(), Some("1.1"));
+        assert!(back.skip_signature_active());
+        assert_eq!(back.get("ota_suffix").as_deref(), Some("nightly"));
+
+        // hand-edited overrides without the menu: ignored and reported
+        let (h, w) = Settings::parse("ota_suffix = \"audit\"\nskip_signature = true\n");
+        assert!(!h.developer_menu && h.dev_suffix().is_none() && !h.skip_signature_active());
+        assert!(h.dev_overrides().is_empty());
+        assert!(
+            w.iter().any(|x| x.contains("developer menu is off")),
+            "{w:?}"
+        );
+        let (_, w) = Settings::parse("developer_menu = true\nota_suffix = \"beta\"\n");
+        assert!(w.iter().any(|x| x.starts_with("ota_suffix")), "{w:?}");
+
+        // hiding clears the overrides in the same save (DVM-8)
+        s.set("developer_menu", "false").unwrap();
+        assert!(!s.has_dev_values());
+        assert!(!s.to_toml().contains("developer_menu"));
     }
 }

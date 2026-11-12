@@ -14,7 +14,15 @@ use crate::ui::tk::views::{Checkbox, Dialog, EditView, LinearLayout, SelectView}
 use crate::ui::tk::{Event, Key, MouseKind, Ui, Vec2};
 
 /// Entries that would use the host network (sim mode runs network actions for real).
-const SKIP: &[&str] = &["Network / Test", "Network / Speed test"];
+const SKIP: &[&str] = &[
+    "Network / Test",
+    "Network / Speed test",
+    "Developer / Image flavor...",
+];
+
+/// Tests that show the developer menu (process-wide settings) do not run while another test
+/// walks the menu bar.
+static MENU_LOCK: Mutex<()> = Mutex::new(());
 
 struct Fixture {
     _dir: tempfile::TempDir,
@@ -76,6 +84,7 @@ fn status_screen_and_status_line() {
 
 #[test]
 fn every_menu_entry_opens_and_fits() {
+    let _lock = MENU_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     for (w, h) in [(80, 24), (100, 30)] {
         let mut f = fixture();
         let mut t = term(w, h);
@@ -426,4 +435,96 @@ fn theme_shows_when_picked_and_is_kept_by_save() {
     assert_eq!(crate::settings::current().theme, "norton");
     key(&mut f.ui, Key::Enter);
     assert_eq!(bg(&mut f.ui, &mut t, at), Color::Blue, "kept after Save");
+}
+
+/// DVM-1, DVM-8: Ctrl-D on the Status screen shows the Developer menu, "Hide" removes it.
+#[test]
+fn developer_menu_shown_with_ctrl_d_and_hidden_again() {
+    let _lock = MENU_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let mut f = fixture();
+    let mut t = term(80, 24);
+    let has_menu = |ui: &mut Ui| {
+        super::build_menubar(ui);
+        ui.menubar()
+            .leaves()
+            .iter()
+            .any(|(l, _)| l.starts_with("Developer / "))
+    };
+    assert!(!has_menu(&mut f.ui));
+
+    // Ctrl-D only on the Status screen
+    crate::ui::show_screen(&mut f.ui, Dialog::text("x"));
+    f.ui.on_event(Event::CtrlChar('d'));
+    let rows = screen(&mut f.ui, &mut t);
+    assert!(!contains(&rows, "Show the developer menu"));
+    super::pop_to_base(&mut f.ui);
+
+    f.ui.on_event(Event::CtrlChar('d'));
+    let rows = screen(&mut f.ui, &mut t);
+    assert!(
+        contains(&rows, "Show the developer menu"),
+        "{}",
+        rows.join("\n")
+    );
+    click(&mut f.ui, find(&rows, "<Show>"));
+    let rows = screen(&mut f.ui, &mut t);
+    assert!(
+        contains(&rows, "Developer menu shown"),
+        "{}",
+        rows.join("\n")
+    );
+    assert!(crate::settings::current().developer_menu);
+    key(&mut f.ui, Key::Enter);
+    // the menu bar is rebuilt when it opens (Esc)
+    key(&mut f.ui, Key::Esc);
+    let rows = screen(&mut f.ui, &mut t);
+    assert!(rows[0].contains("Developer"), "{}", rows[0]);
+    key(&mut f.ui, Key::Esc);
+    assert!(has_menu(&mut f.ui));
+
+    // every Developer entry opens and fits (the flavor list needs the network)
+    for (label, cb) in f.ui.menubar().leaves() {
+        if !label.starts_with("Developer / ") || SKIP.contains(&label.as_str()) {
+            continue;
+        }
+        cb(&mut f.ui);
+        let rows = screen(&mut f.ui, &mut t);
+        assert!(f.ui.screen_len() > 1, "{label}");
+        assert!(
+            rows.iter()
+                .skip(1)
+                .any(|r| r.contains('└') && r.contains('┘')),
+            "{label}:\n{}",
+            rows.join("\n")
+        );
+        super::pop_to_base(&mut f.ui);
+    }
+
+    // a hand-made override shows DEV; hiding clears it
+    let mut s = crate::settings::current();
+    s.ota_suffix = "nightly".into();
+    crate::settings::save(f.ui.app().backend.as_ref(), &s).unwrap();
+    super::update_status_line(&mut f.ui);
+    let rows = screen(&mut f.ui, &mut t);
+    assert!(rows[23].contains("DEV"), "{}", rows[23]);
+    let hide =
+        f.ui.menubar()
+            .leaves()
+            .into_iter()
+            .find(|(l, _)| l == "Developer / Hide developer menu")
+            .map(|(_, cb)| cb)
+            .expect("hide entry");
+    hide(&mut f.ui);
+    let rows = screen(&mut f.ui, &mut t);
+    click(&mut f.ui, find(&rows, "<Hide>"));
+    let rows = screen(&mut f.ui, &mut t);
+    assert!(
+        contains(&rows, "Developer menu hidden"),
+        "{}",
+        rows.join("\n")
+    );
+    let cfg = crate::settings::current();
+    assert!(!cfg.developer_menu && !cfg.has_dev_values());
+    assert!(!rows[23].contains("DEV"), "{}", rows[23]);
+    assert!(!has_menu(&mut f.ui));
 }

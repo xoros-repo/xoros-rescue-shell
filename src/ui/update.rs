@@ -65,7 +65,9 @@ fn ota_start(s: &mut Ui) {
     let Some(app) = app(s) else { return };
     pop_to_base(s);
     let dev = device_target(app.backend.as_ref());
-    let intro = match (&dev.target, dev.source_slot) {
+    let cfg = crate::settings::current();
+    let defaults = dev.network_defaults(&cfg);
+    let mut intro = match (&dev.target, dev.source_slot) {
         (Some(_), Some(slot)) => format!(
             "Version, machine and suffix are taken from the newest valid slot ({}).",
             slot.name()
@@ -73,8 +75,16 @@ fn ota_start(s: &mut Ui) {
         _ => "No valid slot: enter version and suffix (machine from the rescue host name)."
             .to_string(),
     };
-    let t = dev.target.clone();
-    let cfg = crate::settings::current();
+    if defaults.overridden {
+        // DVM-5
+        intro = format!(
+            "Version and suffix: developer override ({}). Machine from the device.",
+            cfg.dev_overrides().join(", ")
+        );
+    }
+    if cfg.skip_signature_active() {
+        intro.push_str("\nSignature check OFF (developer menu).");
+    }
     let layout = LinearLayout::vertical()
         .child(TextView::new(intro).max_width(MAX_W))
         .child(TextView::new(" "))
@@ -82,7 +92,7 @@ fn ota_start(s: &mut Ui) {
         .child(field(
             "Version",
             F_VERSION,
-            t.as_ref().map(|t| t.version.as_str()).unwrap_or(""),
+            defaults.version.as_deref().unwrap_or(""),
         ))
         .child(field(
             "Machine",
@@ -92,7 +102,7 @@ fn ota_start(s: &mut Ui) {
         .child(field(
             "Suffix",
             F_SUFFIX,
-            t.as_ref().map(|t| t.suffix.as_str()).unwrap_or("stable"),
+            defaults.suffix.map(|x| x.as_str()).unwrap_or("stable"),
         ))
         .child(field("Proxy", F_PROXY, &cfg.http_proxy))
         .child(TextView::new(
@@ -134,7 +144,9 @@ fn ota_check_clicked(s: &mut Ui) {
         proxy,
     };
     let current = device_target(app.backend.as_ref()).target;
-    match current.filter(|t| t.suffix != suffix) {
+    // A suffix chosen in the developer menu was confirmed there (DVM-3).
+    let chosen = crate::settings::current().dev_suffix();
+    match current.filter(|t| t.suffix != suffix && chosen != Some(suffix)) {
         Some(t) => dialogs::confirm(
             s,
             texts::TITLE_CONFIRM,

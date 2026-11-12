@@ -91,6 +91,9 @@ pub struct SystemStatus {
     pub layout_error: Option<String>,
     pub network: NetworkSummary,
     pub clock: ClockInfo,
+    /// DVM-6: developer overrides in effect (empty: none).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub developer: Vec<String>,
 }
 
 /// Decide the reason text from boot state and slot validity.
@@ -212,6 +215,7 @@ pub fn collect_status(backend: &dyn SystemBackend, rescue_check: RescueCheck) ->
         layout_error: layout.err().map(|e| e.to_string()),
         network: network_summary(&host),
         clock: clock_info(),
+        developer: crate::settings::current().dev_overrides(),
     }
 }
 

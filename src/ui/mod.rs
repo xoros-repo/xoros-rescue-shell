@@ -4,6 +4,7 @@
 pub mod access;
 pub mod backup;
 pub mod boot;
+pub mod developer;
 pub mod dialogs;
 pub mod jobs;
 pub mod maint;
@@ -63,6 +64,10 @@ fn status_line_text(app: &App, width: usize) -> String {
     if let Some(tag) = access::status_tag() {
         parts.push(tag.to_string());
     }
+    // DVM-6
+    if !crate::settings::current().dev_overrides().is_empty() {
+        parts.push("DEV".to_string());
+    }
     if app.backend.is_simulation() {
         parts.push(format!("[{}]", texts::SIMULATION_NOTE));
     }
@@ -116,8 +121,13 @@ fn build_menubar(s: &mut Ui) {
         .add_subtree(texts::MENU_BACKUP, backup::menu())
         .add_subtree(texts::MENU_NETWORK, network::menu())
         .add_subtree(texts::MENU_TESTS, tests::menu())
-        .add_subtree(texts::MENU_TOOLS, tools::menu())
-        .add_subtree(texts::MENU_POWER, power::menu());
+        .add_subtree(texts::MENU_TOOLS, tools::menu());
+    // DVM-1: only while enabled.
+    if crate::settings::current().developer_menu {
+        s.menubar()
+            .add_subtree(texts::MENU_DEVELOPER, developer::menu());
+    }
+    s.menubar().add_subtree(texts::MENU_POWER, power::menu());
 }
 
 fn base_layer() -> impl View {
@@ -199,6 +209,12 @@ fn build(app: Arc<App>) -> Ui {
     });
     siv.set_on_pre_event(Event::CtrlChar('c'), |s| {
         dialogs::info(s, APP_NAME, texts::CTRL_C_HINT);
+    });
+    // DVM-1: Ctrl-D on the Status screen shows the developer menu.
+    siv.add_global_callback(Event::CtrlChar('d'), |s| {
+        if s.screen_len() == BASE_LAYERS {
+            developer::ctrl_d(s);
+        }
     });
     siv.add_global_callback('r', |s| {
         if s.screen_len() == BASE_LAYERS {

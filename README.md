@@ -118,6 +118,22 @@ xoros-rescue-shell [--sim <dir>] --cli time show | sync [<server>...] | set 'YYY
 `<source>`: `--base <url> [--proxy <url>] [--version <v>] [--machine <m>] [--suffix <s>]` (default:
 `https://ota.xoros.io` and the newest valid slot) or `--stick <id> --path <dir or image>`.
 
+### Developer menu
+
+Hidden on purpose: the in-app help does not mention it [DVM-1]. `Ctrl-D` on the Status screen (admin session)
+or `--cli settings set developer_menu true` adds a `Developer` menu: the image flavors and versions the OTA server
+publishes for this machine (from `<base>/index/<machine>.json`), choosing one as the default for Update -> From
+network, the OTA server, and turning the signature check off. The status bar shows `DEV` while an override is in
+effect; "Hide developer menu" clears the overrides [DVM-2..9]. CLI [DVM-10]:
+
+```shell
+xoros-rescue-shell --cli dev status [--json] | list [--base <url>] [--json] | set <version> <suffix>
+xoros-rescue-shell --cli dev skip-signature on|off | reset | hide
+```
+
+A local mirror for testing [DVM-11]: `../xoros-distro/scripts/publish-ota.sh <ota dir> <mirror>`, then
+`python3 -m http.server -d <mirror> 8000` and `--cli settings set ota_base_url http://127.0.0.1:8000`.
+
 ## Menu Structure
 
 ```

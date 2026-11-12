@@ -137,6 +137,8 @@ stops when the rescue shell exits. Public keys can be loaded from 'authorized_ke
 // --- Settings, PIN, partition maintenance, sticks (CFG-*, BAK-6/7, USB-5) ---
 
 pub const TITLE_SETTINGS: &str = "Settings";
+pub const TITLE_DEVELOPER: &str = "Developer";
+pub const MENU_DEVELOPER: &str = "Developer";
 pub const TITLE_PIN: &str = "PIN";
 
 pub const SETTINGS_INTRO: &str = "Stored on the overlay partition (rescue/rescue-shell.toml), \

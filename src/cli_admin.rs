@@ -265,7 +265,11 @@ pub fn power_cmd(app: &App, args: &[String]) -> Result<String, String> {
 fn settings_text(st: &settings::State) -> String {
     let s = &st.settings;
     let mut t = format!("# {}\n", st.origin_text());
+    let dev = s.developer_menu || s.has_dev_values();
     for k in settings::USER_KEYS {
+        if !dev && settings::DEV_KEYS.contains(k) {
+            continue;
+        }
         t.push_str(&format!("{k} = {}\n", s.get(k).unwrap_or_default()));
     }
     if s.pin_enabled() {
@@ -526,6 +530,103 @@ pub fn run_power(app: &App, args: &[String]) -> i32 {
 
 pub fn run_settings(app: &App, args: &[String]) -> i32 {
     print_result(settings_cmd(app, args))
+}
+
+// --------------------------------------------------------------------------------------------
+// developer menu (DVM-10). Not in the usage text (DVM-1); like every CLI command it runs as root,
+// reachable only through the subshell or SSH (admin only, SEC-8).
+
+pub fn dev_cmd(app: &App, args: &[String]) -> Result<String, String> {
+    use crate::devmenu;
+    use std::str::FromStr;
+    use xoros_core::env::Suffix;
+
+    let b = app.backend.as_ref();
+    let cfg = settings::current();
+    let save = |s: &Settings, what: &str| -> Result<String, String> {
+        settings::save(b, s)?;
+        log::info!("action: developer menu: {what}");
+        Ok(devmenu::status_text(s))
+    };
+    let need_menu = || {
+        if cfg.developer_menu {
+            Ok(())
+        } else {
+            Err(
+                "The developer menu is hidden: 'settings set developer_menu true' first."
+                    .to_string(),
+            )
+        }
+    };
+    match args.first().map(String::as_str) {
+        Some("status") | None => {
+            expect_args(args, 0, &[], &["--json"])?;
+            if flag(args, "--json") {
+                let v = serde_json::json!({
+                    "developer_menu": cfg.developer_menu,
+                    "overrides": cfg.dev_overrides(),
+                    "ota_base_url": cfg.ota_base_url,
+                    "ota_version": cfg.dev_version(),
+                    "ota_suffix": cfg.dev_suffix(),
+                    "skip_signature": cfg.skip_signature_active(),
+                });
+                return serde_json::to_string_pretty(&v)
+                    .map(|s| s + "\n")
+                    .map_err(|e| e.to_string());
+            }
+            Ok(devmenu::status_text(&cfg))
+        }
+        Some("list") => {
+            expect_args(args, 0, &["--base"], &["--json"])?;
+            let base = opt(args, "--base").unwrap_or_else(|| cfg.ota_base_url.clone());
+            let list = devmenu::load_flavors(b, &base)?;
+            if flag(args, "--json") {
+                return serde_json::to_string_pretty(&list)
+                    .map(|s| s + "\n")
+                    .map_err(|e| e.to_string());
+            }
+            Ok(list.text())
+        }
+        Some("set") => {
+            let p = expect_args(args, 2, &[], &[])?;
+            need_menu()?;
+            let suffix = Suffix::from_str(&p[1]).map_err(|e| e.to_string())?;
+            let installed = crate::update_jobs::device_target(b).target;
+            for w in devmenu::choice_warnings(installed.as_ref(), &p[0], suffix) {
+                eprintln!("warning: {w}");
+            }
+            let s = devmenu::with_flavor(&cfg, installed.as_ref(), &p[0], suffix)?;
+            save(&s, &format!("flavor {} {suffix}", p[0]))
+        }
+        Some("skip-signature") => {
+            let p = expect_args(args, 1, &[], &[])?;
+            need_menu()?;
+            let mut s = cfg.clone();
+            s.set("skip_signature", &p[0])?;
+            if s.skip_signature {
+                eprintln!("warning: manifests are loaded without checking signature.json (DVM-7).");
+            }
+            save(&s, &format!("skip signature {}", s.skip_signature))
+        }
+        Some("reset") => {
+            expect_args(args, 0, &[], &[])?;
+            need_menu()?;
+            save(&devmenu::reset(&cfg), "reset")
+        }
+        Some("hide") => {
+            expect_args(args, 0, &[], &[])?;
+            save(&devmenu::hidden(&cfg), "hidden")
+        }
+        _ => Err(
+            "dev needs: status [--json] | list [--base <url>] [--json] | set <version> <suffix> \
+             | skip-signature on|off | reset | hide."
+                .into(),
+        ),
+    }
+}
+
+pub fn run_dev(app: &App, args: &[String]) -> i32 {
+    print_result(dev_cmd(app, args))
 }
 
 // --------------------------------------------------------------------------------------------

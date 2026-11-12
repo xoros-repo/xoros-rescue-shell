@@ -1,6 +1,6 @@
 # XorOS Rescue Shell: Technical Implementation Requirements
 
-Status: draft 4 (2026-11-12; draft 3: 2026-11-10; draft 2: 2026-10-27). Target app: `xoros-rescue-shell` from github.com/xoros-repo/xoros-rescue-shell.
+Status: draft 5 (2026-11-12; draft 4: 2026-11-12; draft 3: 2026-11-10; draft 2: 2026-10-27). Target app: `xoros-rescue-shell` from github.com/xoros-repo/xoros-rescue-shell.
 Related: `../xoros-xor-tool/REQUIREMENTS.md` (shared crate `xoros-core` and the `xor` tool, see [section 9.1](#91-shared-crate-xoros-core)).
 
 This document contains everything needed to implement the rescue shell without access to the `xoros-distro`
@@ -287,6 +287,7 @@ Backup            export/import persistent partitions (BAK-*), factory reset (RS
 Network           configure/test rescue network, copy to normal system (NET-*)
 Tests             memory, disk, slot integrity, file system check (TST-*)
 Tools             logs, diagnostics bundle, subshell, remote access, unlock/lock, admin password (LOG-*, SH-*, SSH-*, SEC-*)
+Developer         only when enabled: image flavor, version, OTA server, signature check (DVM-*)
 Power             reboot, reboot into slot, power off (PWR-*)
 ```
 
@@ -378,7 +379,8 @@ Requirements:
 
 - **OTA-1 (P1)** Determine `VERSION`, `MACHINE`, `SUFFIX` from the newest valid slot's `xoros.env`. If no slot is
   valid, ask the user (MACHINE preset from the running rescue system's hostname `xoros-rescue-<machine>`; VERSION and
-  SUFFIX entered/selected). The user MAY switch SUFFIX (e.g. `devel` -> `stable`) with a warning.
+  SUFFIX entered/selected). The user MAY switch SUFFIX (e.g. `devel` -> `stable`) with a warning. Developer
+  overrides (`DVM-5`) replace VERSION and SUFFIX from the slot while they are in effect.
 - **OTA-2 (P1)** Fetch the manifest, check `machine`, `version` and `suffix` match. Mismatch is an error.
 - **OTA-3 (P1)** List `rootfs` images with formatted build timestamp, size, and whether it is newer/same/older than
   each slot. Default selection: the newest. Installing the same or an older build is allowed in rescue but needs an
@@ -636,6 +638,10 @@ include it in the diagnostics bundle (`LOG-2`).
   ntp_servers = ["pool.ntp.org", "time.cloudflare.com"]
   theme = "default"            # default, dark, mono, norton
   admin_idle_timeout = 300     # seconds without a key press before an admin session locks (SEC-2)
+  developer_menu = false       # show the Developer menu (DVM-1)
+  ota_version = ""             # developer overrides (DVM-5), empty = from the slot
+  ota_suffix = ""
+  skip_signature = false       # DVM-7
   ```
 
   The app MUST work when the overlay partition is missing or broken (settings are then read-only defaults).
@@ -685,6 +691,64 @@ open.
   subshell or `SSH-1` (both admin only; root cannot log in, `RT-1`), so CLI commands do not ask for the password.
   Commands: `--cli admin status` (off / build default / device password / locked / legacy PIN), `--cli admin
   set-password` (password on stdin), `--cli admin clear-password`, `--cli boot menu <shown|hidden|once|default>`.
+
+### 6.13 Developer menu (`DVM`)
+
+For developers and testers who move a device between image flavors (`SUFFIX`, 4.4), versions and OTA servers. The
+same things are possible today by typing into the Update dialog each time; the menu makes the choice stick, shows what
+the server has, and keeps it out of sight on customer devices.
+
+- **DVM-1 (P2)** Visibility: the `Developer` menu (menu bar, after `Tools`) exists only while `developer_menu = true`
+  (`CFG-1`, default `false`). Nothing in the other menus, the Settings screen or the help text mentions it. It is
+  enabled in one of two ways, both needing an admin session (`SEC-1`, settings write):
+  - `Ctrl-D` on the Status screen: "Show the developer menu? It lets this device install development builds."
+    -> sets `developer_menu = true`;
+  - CLI `--cli settings set developer_menu true` (subshell or `SSH-1`, which are admin only).
+- **DVM-2 (P2)** Flavor list: fetch the flavor index of the device's machine from the OTA server (`DIST-17`,
+  `XC-112`) and list every published `<VERSION>/<SUFFIX>`: version, suffix, newest build (formatted), number of builds,
+  signed yes/no. Mark the flavor of the newest valid slot (`OTA-1`, "installed") and the current override
+  ("selected"). The index is informational only: choosing an entry selects it, the update check then fetches and
+  checks the manifest as always (`OTA-2`, `OTA-8`). Without an index (HTTP 404, older server) or without network the
+  list is the four suffixes of the installed version with "not checked" and a note why; the update check finds out
+  whether the flavor exists. The first entry is "Follow the installed build" (clears the overrides).
+- **DVM-3 (P2)** Choosing a flavor sets `ota_version` and `ota_suffix` (`CFG-1`) after a confirmation that says what
+  changes:
+  - to `devel` or `audit`: these images have debug access (empty root password, root login, audit user, no console
+    lockdown, `DIST-14`); not for devices that leave the developer's hands;
+  - to `stable` from another flavor: the next install locks root and removes the development tools;
+  - another version than installed: the persistent partitions (`overlay`, `application`) are kept as they are and
+    may not suit the other version (backup first, `BAK-1`).
+  Nothing is downloaded or written by choosing; the user installs with Update -> From network.
+- **DVM-4 (P2)** OTA server: edit `ota_base_url` (same check as the Settings screen and `OTA-11`; HTTP only for a URL
+  typed in explicitly), with "Reset to default" (`https://ota.xoros.io`). The flavor list (`DVM-2`) is reloaded from
+  the new server.
+- **DVM-5 (P2)** Effect of the overrides: while `developer_menu = true` and `ota_version`/`ota_suffix` are set,
+  Update -> From network and `--cli update` (network source) take VERSION and SUFFIX from them instead of the slot
+  (`OTA-1`); MACHINE always comes from the device. The Update dialog says "developer override" next to the values and
+  still allows editing them for one check. USB updates (`USB-*`) are not affected: the stick decides what is
+  offered, the switch warning of `OTA-1` applies there as before.
+- **DVM-6 (P2)** Visible state: while any override (`ota_version`, `ota_suffix`, `skip_signature`, or an
+  `ota_base_url` other than the default) is in effect, the status bar shows `DEV` and the Status screen lists the
+  overrides. The system report and diagnostics bundle (`SYS-5`, `LOG-2`) include them.
+- **DVM-7 (P2)** Skip signature check: `skip_signature = true` (toggle in the menu, confirmation) loads manifests
+  from the network and from sticks without checking `signature.json`, also when `require_signature = true`
+  (`XC-58`). SHA-256 checks of chunks and images stay. Every update check and write in this mode logs a warning
+  (`LOG-3`) and the update dialogs show "Signature check OFF (developer menu)".
+- **DVM-8 (P2)** "Hide developer menu" sets `developer_menu = false` and clears `ota_version`, `ota_suffix` and
+  `skip_signature` in the same save, so a hidden menu never leaves an invisible override behind. When the file has
+  overrides but `developer_menu = false` (edited by hand), the overrides are ignored and the Settings screen warns.
+  "Reset developer settings" clears the overrides and keeps the menu. Factory reset with "reset rescue settings"
+  (`RST-1`) removes everything, as for every setting.
+- **DVM-9 (P2)** Access: every change in the menu is a settings write and needs an admin session (`SEC-1`); viewing
+  the flavor list is open while the menu is visible.
+- **DVM-10 (P2)** CLI (`ARCH-2`): `--cli dev list [--base <url>] [--json]` (the `DVM-2` list), `--cli dev status
+  [--json]` (overrides in effect), `--cli dev set <version> <suffix>`, `--cli dev skip-signature on|off`,
+  `--cli dev reset`, `--cli dev hide`. The keys can also be set with `--cli settings set`; the same checks apply
+  (`ota_suffix` one of the four suffixes, `ota_version` path-safe, `DVM-1` for `developer_menu`).
+- **DVM-11 (P2)** Testing without the real server needs no special code: a local mirror made by the distro's
+  `scripts/publish-ota.sh <ota dir> <mirror dir>` (`XD-8`, `XD-9`; it writes the index too), served with
+  `python3 -m http.server -d <mirror dir> 8000` and `ota_base_url = "http://127.0.0.1:8000"`, works in simulation
+  (`SIM-1`) and on a device.
 
 ## 7. User interface requirements
 
@@ -749,6 +813,7 @@ in both tools and are tested once.
   | ENV-1..3, BOOT-1..7, ROT-1 (grubenv values), PWR-1 (`NEXT_BOOT`) | `grubenv::GrubEnv`, `boot::BootState`, `BootPartition` (XC-30..36) |
   | SYS-1 build info and rescue reason, OTA-1 | `env::BuildInfo`, `BootState::rescue_reason`, `device::slot_info` (XC-21..23, 33, 45) |
   | OTA-2..8, OTA-11, USB-2..4 | `manifest`, `signature`, `source::{HttpSource, DirSource, FileSource}`, `flash::{update_slot, copy_slot}` (XC-50..72) |
+  | DVM-2, DVM-7 (flavor index, skip signature) | `index::{FlavorIndex, fetch_index}`, `SignaturePolicy::skip` (XC-58, XC-110..112) |
   | TST-4, TST-5 (squashfs size, hashing) | `squashfs::Superblock`, `PartitionWriter::hash_range` (XC-43, 44) |
   | NET-4 (connectivity part), NET-6/NET-8 (keyfile format) | `net::connectivity_check`, `net::nm_keyfile` (XC-90, 91; P2 in the crate, the rescue shell MAY implement them locally until then and move them later) |
 
@@ -867,6 +932,7 @@ described in the corresponding requirement.
 | DIST-14 | Production images (`xoros-image-stable` and anything shipped to customers; devel/audit keep their debug access, `XOROS_CONSOLE_LOCKDOWN = "0"`): root locked (the build fails when the image features would give root an empty password or a password-less login), no `empty-root-password`/`allow-empty-password`/`allow-root-login`/`debug-tweaks`, no autologin getty; Weston `[keyboard] vt-switching=false` and no terminal or launcher in the kiosk session; `kernel.sysrq=0` (rescue image too); `sshd` key-only. | 4.7 | The normal system is the easier way in: a console user gets a root shell there. |
 | DIST-15 | Deployment guide (documentation, not the image): x86 UEFI setup password and boot only from the internal disk (USB/PXE boot off or after the disk); on the Pi the EEPROM boot order cannot be locked, so USB ports and the SD slot need physical protection where this matters. | 4.7 | Booting another medium bypasses everything above. |
 | DIST-16 | OTA artifacts are published to a Cloudflare R2 bucket served at `https://ota.xoros.io` (layout as in 6.3, unchanged for devices), replacing the Cloudflare Pages project, whose every deployment replaced the whole site with the board just built. Publishing merges the new build into the published `manifest.json` and keeps the two newest builds per `<VERSION>/<MACHINE>/<SUFFIX>` (`XD-8` in `../xoros-xor-tool/REQUIREMENTS.md`). | `OTA-3` (downgrade to the previous build) | Only the newest build of one machine is online; no way back over the network. |
+| DIST-17 | Publishing also maintains a flavor index per machine, `<base>/index/<MACHINE>.json`, listing every published `<VERSION>/<SUFFIX>` of that machine with its builds (`XD-9`, `XC-110` in `../xoros-xor-tool/REQUIREMENTS.md`). | `DVM-2` | The developer menu lists the four suffixes of the installed version unchecked. |
 
 ## 13. Current state of the app (for orientation)
 
@@ -890,3 +956,5 @@ The `models` module holds an older manifest shape; replace it with the one in 6.
    hardening), `DIST-15` as documentation.
 6. **M6 (P2, distro):** OTA publishing to R2 with the previous build kept (`DIST-16`), on top of `xoros-core` C5
    (`XC-82`, `XT-12`). No app change: the app already lists several builds and offers a downgrade (`OTA-3`).
+7. **M7 (P2):** developer menu (`DVM-*`), on top of `xoros-core` C6 (`XC-58`, `XC-110..112`). Distro: flavor index
+   (`DIST-17`, `XD-9`).

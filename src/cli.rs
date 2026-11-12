@@ -50,6 +50,8 @@ pub enum Command {
     Stick(Vec<String>),
     /// `--cli admin <args>` (SEC-8).
     Admin(Vec<String>),
+    /// `--cli dev <args>` (DVM-10; not in the usage text, DVM-1).
+    Dev(Vec<String>),
     /// `--sim-init <dir>`: write an example simulation directory.
     SimInit(PathBuf),
     Help,
@@ -179,6 +181,7 @@ where
             Some("settings") => command = Command::Settings(words.map(str::to_string).collect()),
             Some("stick") => command = Command::Stick(words.map(str::to_string).collect()),
             Some("admin") => command = Command::Admin(words.map(str::to_string).collect()),
+            Some("dev") => command = Command::Dev(words.map(str::to_string).collect()),
             Some(other) => {
                 return Err(format!(
                     "CLI command '{other}' is not implemented yet \
@@ -484,12 +487,20 @@ fn origin_arg(app: &App, args: &[String]) -> Result<update_jobs::Origin, String>
         });
     }
     let dev = update_jobs::device_target(app.backend.as_ref());
-    let base = opt_value(args, "--base").unwrap_or_else(|| crate::settings::current().ota_base_url);
-    let version = opt_value(args, "--version").or(dev.target.as_ref().map(|t| t.version.clone()));
+    let cfg = crate::settings::current();
+    let defaults = dev.network_defaults(&cfg);
+    if defaults.overridden {
+        eprintln!(
+            "note: developer override in effect: {}",
+            cfg.dev_overrides().join(", ")
+        );
+    }
+    let base = opt_value(args, "--base").unwrap_or_else(|| cfg.ota_base_url.clone());
+    let version = opt_value(args, "--version").or(defaults.version);
     let machine = opt_value(args, "--machine").or(dev.machine.clone());
     let suffix = match opt_value(args, "--suffix") {
         Some(s) => Some(Suffix::from_str(&s).map_err(|e| e.to_string())?),
-        None => dev.target.as_ref().map(|t| t.suffix),
+        None => defaults.suffix,
     };
     let (Some(version), Some(machine), Some(suffix)) = (version, machine, suffix) else {
         return Err("No valid slot: give --version, --machine and --suffix (OTA-1).".into());

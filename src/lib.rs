@@ -13,6 +13,7 @@ pub mod cli_tests;
 pub mod clock;
 pub mod cmd;
 pub mod constants;
+pub mod devmenu;
 pub mod diagnostics;
 pub mod hw;
 pub mod hwtest;

@@ -130,6 +130,29 @@ pub fn device_target(backend: &dyn SystemBackend) -> DeviceTarget {
     d
 }
 
+/// VERSION and SUFFIX for a network update: the developer overrides (DVM-5) where set, else
+/// the newest valid slot (OTA-1).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NetworkDefaults {
+    pub version: Option<String>,
+    pub suffix: Option<Suffix>,
+    /// At least one value comes from a developer override.
+    pub overridden: bool,
+}
+
+impl DeviceTarget {
+    pub fn network_defaults(&self, s: &crate::settings::Settings) -> NetworkDefaults {
+        let slot = self.target.as_ref();
+        let version = s.dev_version().map(str::to_string);
+        let suffix = s.dev_suffix();
+        NetworkDefaults {
+            overridden: version.is_some() || suffix.is_some(),
+            version: version.or_else(|| slot.map(|t| t.version.clone())),
+            suffix: suffix.or_else(|| slot.map(|t| t.suffix)),
+        }
+    }
+}
+
 // --------------------------------------------------------------------------------------------
 // origins
 
@@ -404,6 +427,7 @@ pub fn signature_text(s: &SignatureStatus) -> String {
         SignatureStatus::Verified { key } => format!("verified (trusted key #{})", key.index),
         SignatureStatus::Unsigned => "unsigned (no signature.json)".into(),
         SignatureStatus::NotChecked => "signed, not checked (no trusted keys configured)".into(),
+        SignatureStatus::Skipped => "Signature check OFF (developer menu)".into(),
         _ => "unknown".into(),
     }
 }
