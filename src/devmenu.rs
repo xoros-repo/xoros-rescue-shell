@@ -309,6 +309,7 @@ mod tests {
             suffix: s,
             builds: b.iter().map(|x| x.parse().unwrap()).collect(),
             signed,
+            pinned: Vec::new(),
         };
         FlavorIndex {
             distro: "xoros".into(),

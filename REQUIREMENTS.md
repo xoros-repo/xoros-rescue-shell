@@ -369,7 +369,8 @@ Server layout (default base URL `https://ota.xoros.io`, configurable `CFG-1`):
 - The rootfs image is a squashfs (no partition table), written at offset 0 of the slot partition.
 - A manifest MAY list several builds. The images of one build (`rootfs` and `rescue`) share its `build_timestamp`.
   The server keeps the two newest builds of each `<VERSION>/<MACHINE>/<SUFFIX>`, so a device can go back one build
-  (`OTA-3`); publishing is described in `DIST-16`. Image `index` values are unique within a manifest but are not
+  (`OTA-3`); publishing is described in `DIST-16`. Pinned builds (images with `"pinned": true`, `DIST-18`) are kept
+  in addition, however old they are. Image `index` values are unique within a manifest but are not
   contiguous and need not start at 0 (older builds are removed); the app MUST identify an image by its `index` and
   `sha256`, never by its position in `images`.
 - A chunk of a build that was removed from the server while it was being downloaded fails with HTTP 404: a download
@@ -383,7 +384,7 @@ Requirements:
   overrides (`DVM-5`) replace VERSION and SUFFIX from the slot while they are in effect.
 - **OTA-2 (P1)** Fetch the manifest, check `machine`, `version` and `suffix` match. Mismatch is an error.
 - **OTA-3 (P1)** List `rootfs` images with formatted build timestamp, size, and whether it is newer/same/older than
-  each slot. Default selection: the newest. Installing the same or an older build is allowed in rescue but needs an
+  each slot; a pinned build (`DIST-18`) is marked "pinned" (P2). Default selection: the newest. Installing the same or an older build is allowed in rescue but needs an
   extra confirmation ("downgrade").
 - **OTA-4 (P1)** Target selection: slot A, slot B or A+B. Check `size` fits into the target partition.
 - **OTA-5 (P1)** Write procedure, per target slot:
@@ -405,7 +406,7 @@ Requirements:
   secp256k1, created with the Rust `k256` crate: `SigningKey::sign(sha256(manifest))`, i.e. the signed message is the
   32-byte manifest digest (which `k256` hashes again with SHA-256 internally). The app MUST verify `mh` against the
   downloaded manifest bytes and `ms` with a public key from the trusted key list (`CFG-1`), **not** with the `pk`
-  field from the server. Today the build does not publish `signature.json` (see `DIST-5`).
+  field from the server. The build publishes `signature.json` when it has a signing key (`DIST-5`).
 - **OTA-9 (P1)** `rescue` images in the manifest are shown (with "matches current rescue: yes/no") but MUST NOT be
   written: the rescue partition is the running root filesystem. Updating rescue is done from the normal system.
   `boot` images are not supported in this version.
@@ -908,6 +909,23 @@ The app MUST be developable on a normal Linux PC without a device and without th
       admin-only action of `SEC-1` asks for the password and the idle timeout locks the session; deleting `admin.cfg`
       makes the build default apply, a corrupted `admin.cfg` too (GRUB and rescue shell agree); `MENU_MODE=once` shows
       the menu exactly once.
+  11. Developer menu (`DVM-*`): OTA server set to a local mirror, the flavor list read from its index, update of slot B
+      from the mirror, boot B; hiding the menu clears the overrides. `update check` and `update start` show the
+      signature status (`OTA-8`) that follows from the mirror and the image's trusted keys: verified when the image
+      trusts the build's key, "signed, not checked" when it trusts no key, unsigned without `signature.json`; signed by
+      a key the image does not trust, the update is refused and goes through only with the developer menu's signature
+      check off (`DVM-7`, shown as "Signature check OFF").
+  12. Signatures (`OTA-8`, `DVM-7`) on an image that trusts the build's signing key (`DIST-5`): a correctly signed
+      mirror is shown as verified and slot B is updated from it. Refused by `update check` and `update start`, slot B
+      left as it was: `signature.json` with a corrupted `ms`, `manifest.json` changed after signing (`mh`), signed by
+      a key the image does not trust, and, with `require_signature = true`, no `signature.json`. With
+      `require_signature = false` an unsigned mirror is accepted and shown as unsigned. With the developer menu's
+      signature check off, the corrupted mirror is accepted and shown as "Signature check OFF".
+
+  Automated in QEMU (x86-64) by `../xoros-distro/tests/qemu` (`scripts/test.sh` there): item 3 over Ethernet together
+  with item 11 by `test_ota.py` (boots an image older than the OTA build under test, publishes that build into a local
+  mirror with `publish-ota.sh`); item 10 by `test_access.py` and `test_access_nohash.py`; item 12 by
+  `test_ota_signature.py` (boots a signed image older than the OTA build under test, same signing key).
 
 ## 12. Distro-side dependencies
 
@@ -931,8 +949,9 @@ described in the corresponding requirement.
 | DIST-13 | Raspberry Pi: U-Boot autoboot cannot be interrupted (`CONFIG_BOOTDELAY=-2`, fragment `xoros-no-autoboot-prompt.cfg`), so the U-Boot shell is not reachable from the console. U-Boot is shared by all images of a build, so this is build wide: `XOROS_UBOOT_AUTOBOOT_PROMPT = "1"` in `local.conf` keeps the prompt for development builds. | 4.7 | The U-Boot shell bypasses GRUB and the password. |
 | DIST-14 | Production images (`xoros-image-stable` and anything shipped to customers; devel/audit keep their debug access, `XOROS_CONSOLE_LOCKDOWN = "0"`): root locked (the build fails when the image features would give root an empty password or a password-less login), no `empty-root-password`/`allow-empty-password`/`allow-root-login`/`debug-tweaks`, no autologin getty; Weston `[keyboard] vt-switching=false` and no terminal or launcher in the kiosk session; `kernel.sysrq=0` (rescue image too); `sshd` key-only. | 4.7 | The normal system is the easier way in: a console user gets a root shell there. |
 | DIST-15 | Deployment guide (documentation, not the image): x86 UEFI setup password and boot only from the internal disk (USB/PXE boot off or after the disk); on the Pi the EEPROM boot order cannot be locked, so USB ports and the SD slot need physical protection where this matters. | 4.7 | Booting another medium bypasses everything above. |
-| DIST-16 | OTA artifacts are published to a Cloudflare R2 bucket served at `https://ota.xoros.io` (layout as in 6.3, unchanged for devices), replacing the Cloudflare Pages project, whose every deployment replaced the whole site with the board just built. Publishing merges the new build into the published `manifest.json` and keeps the two newest builds per `<VERSION>/<MACHINE>/<SUFFIX>` (`XD-8` in `../xoros-xor-tool/REQUIREMENTS.md`). | `OTA-3` (downgrade to the previous build) | Only the newest build of one machine is online; no way back over the network. |
-| DIST-17 | Publishing also maintains a flavor index per machine, `<base>/index/<MACHINE>.json`, listing every published `<VERSION>/<SUFFIX>` of that machine with its builds (`XD-9`, `XC-110` in `../xoros-xor-tool/REQUIREMENTS.md`). | `DVM-2` | The developer menu lists the four suffixes of the installed version unchecked. |
+| DIST-16 | OTA artifacts are published to a Cloudflare R2 bucket served at `https://ota.xoros.io` (layout as in 6.3, unchanged for devices), replacing the Cloudflare Pages project, whose every deployment replaced the whole site with the board just built. Publishing merges the new build into the published `manifest.json` and keeps the two newest builds per `<VERSION>/<MACHINE>/<SUFFIX>`, plus pinned builds (`DIST-18`) (`XD-8` in `../xoros-xor-tool/REQUIREMENTS.md`). | `OTA-3` (downgrade to the previous build) | Only the newest build of one machine is online; no way back over the network. |
+| DIST-17 | Publishing also maintains a flavor index per machine, `<base>/index/<MACHINE>.json`, listing every published `<VERSION>/<SUFFIX>` of that machine with its builds and which of them are pinned (`XD-9`, `XC-110` in `../xoros-xor-tool/REQUIREMENTS.md`). | `DVM-2` | The developer menu lists the four suffixes of the installed version unchecked. |
+| DIST-18 | Pinned builds: a published build can be pinned (`publish-ota.sh --pin=<timestamp>`) and unpinned (`--unpin=`); a pinned build stays on the server and does not count towards the two builds kept by `DIST-16`, e.g. a release or a known-good build to go back to. The pin is a flag in the signed `manifest.json` (`XC-54`, `XC-83`, `XT-15`, `XD-10` in `../xoros-xor-tool/REQUIREMENTS.md`); devices that do not know it ignore it. | `OTA-3` | Only the two newest builds of a flavor are online. |
 
 ## 13. Current state of the app (for orientation)
 
@@ -958,3 +977,5 @@ The `models` module holds an older manifest shape; replace it with the one in 6.
    (`XC-82`, `XT-12`). No app change: the app already lists several builds and offers a downgrade (`OTA-3`).
 7. **M7 (P2):** developer menu (`DVM-*`), on top of `xoros-core` C6 (`XC-58`, `XC-110..112`). Distro: flavor index
    (`DIST-17`, `XD-9`).
+8. **M8 (P2, mostly distro):** pinned builds (`DIST-18`), on top of `xoros-core` C7 (`XC-54`, `XC-83`, `XT-15`,
+   `XD-10`). App: the "pinned" mark in the build list (`OTA-3`).

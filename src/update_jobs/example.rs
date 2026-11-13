@@ -71,6 +71,7 @@ pub fn write_ota_tree(
             index: idx as u64,
             chunk_size,
             chunks,
+            pinned: false,
         });
     }
     fs::write(dir.join("manifest.json"), m.to_json().map_err(invalid)?)?;

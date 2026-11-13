@@ -379,13 +379,15 @@ impl ImageRow {
             .any(|s| self.relation[s.index()] != Relation::Newer)
     }
 
+    /// OTA-3: timestamp, size, relation to each slot; a pinned build (DIST-18) is marked.
     pub fn label(&self) -> String {
         format!(
-            "{}  {:>10}  A: {}  B: {}",
+            "{}  {:>10}  A: {}  B: {}{}",
             format_build_timestamp(self.image.build_timestamp.as_str()),
             format_bytes(self.image.size),
             relation_text(self.relation[0]),
-            relation_text(self.relation[1])
+            relation_text(self.relation[1]),
+            if self.image.pinned { "  pinned" } else { "" }
         )
     }
 }

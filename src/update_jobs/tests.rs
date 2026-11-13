@@ -559,12 +559,14 @@ fn flavor_list_from_index_and_fallback() {
                 suffix: Suffix::Devel,
                 builds: vec![BuildTimestamp::parse(TS).expect("ts")],
                 signed: false,
+                pinned: Vec::new(),
             },
             Flavor {
                 version: "1.1".into(),
                 suffix: Suffix::Nightly,
                 builds: vec![BuildTimestamp::parse(TS).expect("ts")],
                 signed: true,
+                pinned: Vec::new(),
             },
         ],
     };
@@ -600,4 +602,24 @@ fn flavor_list_from_index_and_fallback() {
 
     // an invalid server URL is an error, not a fallback
     assert!(crate::devmenu::load_flavors(f.b.as_ref(), "ftp://x").is_err());
+}
+
+/// OTA-3, DIST-18: a pinned build is marked in the build list, others are not.
+#[test]
+fn pinned_build_is_marked() {
+    let json = |pinned: &str| {
+        format!(
+            r#"{{"type": "rootfs", "sha256": "{}", "size": 1048576, "build_timestamp": "20260101000000",
+               "index": 0, "chunk_size": 1048576, "chunks": []{pinned}}}"#,
+            "ab".repeat(32)
+        )
+    };
+    let row = |pinned: &str| ImageRow {
+        image: serde_json::from_str(&json(pinned)).expect("image"),
+        relation: [Relation::Older, Relation::Newer],
+    };
+    let label = row(r#", "pinned": true"#).label();
+    assert!(label.ends_with("A: older  B: newer  pinned"), "{label}");
+    let label = row("").label();
+    assert!(label.ends_with("A: older  B: newer"), "{label}");
 }
