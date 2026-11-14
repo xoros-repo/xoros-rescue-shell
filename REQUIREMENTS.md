@@ -175,11 +175,18 @@ MACHINE=raspberrypi4-64
 SUFFIX=devel
 TIMESTAMP=20261026214512
 RESCUE_IMAGE_SHA256=1960b487746edcd73db77ea3ed0673434bd70033883557527cd58812cedcf5d7
+SOURCE_REVISION=3f1c0d9e8b7a6f5e4d3c2b1a0f9e8d7c6b5a4f3e
 ```
 
 - `SUFFIX` is one of `stable`, `devel`, `audit`, `nightly`.
 - `TIMESTAMP` is the build time `YYYYMMDDHHMMSS` (UTC of the build host). Newer builds compare greater as strings.
+  When one build run builds several boards (`DIST-20`), it is the start time of the run, the same on each of those
+  boards; it stays unique per `<VERSION>/<MACHINE>/<SUFFIX>`.
 - `RESCUE_IMAGE_SHA256` is the SHA-256 of the rescue squashfs that was built together with this slot.
+- `SOURCE_REVISION` (`DIST-20`) is the commit of `xoros-distro` the build was made from (40 lower-case hex digits),
+  with `-dirty` appended when the checkout had uncommitted or untracked files, or `unknown` when it was not built
+  from a git checkout. Builds of different boards with the same revision without `-dirty` come from the same
+  source. Optional: builds before `DIST-20` have no such line; readers keep unknown keys and MUST NOT fail on it.
 - The rescue squashfs itself has **no** `/xoros.env`. Its identity is `/etc/os-release` (`NAME="Xoros Rescue"`,
   `VERSION_ID`), the hostname `xoros-rescue-<machine>` and the SHA-256 of the rescue partition (`DEV`, 4.1).
 
@@ -310,7 +317,8 @@ Power             reboot, reboot into slot, power off (PWR-*)
   - why the device is in rescue: `NEXT_BOOT`/menu choice (if both slot counters are below `MAX_TRIES`) or
     "both slots exceeded MAX_TRIES" (with the counters) or "slot(s) invalid";
   - per slot: valid/invalid, `VERSION`, `SUFFIX`, `TIMESTAMP` (formatted), `MACHINE`, try counter vs `MAX_TRIES`,
-    position in `ORDER`, whether it was `LAST_BOOT`;
+    position in `ORDER`, whether it was `LAST_BOOT`; `SOURCE_REVISION` when present (first 12 characters, `-dirty`
+    kept; P3);
   - rescue system: `VERSION_ID` from `/etc/os-release`, app version, rescue partition SHA-256 match against each
     slot's `RESCUE_IMAGE_SHA256` (computed in the background, shows "checking..." until done);
   - persistent partitions: present, mountable, used/free space, last fsck result if known;
@@ -970,6 +978,7 @@ described in the corresponding requirement.
 | DIST-17 | Publishing also maintains a flavor index per machine, `<base>/index/<MACHINE>.json`, listing every published `<VERSION>/<SUFFIX>` of that machine with its builds and which of them are pinned (`XD-9`, `XC-110` in `../xoros-xor-tool/REQUIREMENTS.md`). | `DVM-2` | The developer menu lists the four suffixes of the installed version unchecked. |
 | DIST-18 | Pinned builds: a published build can be pinned (`publish-ota.sh --pin=<timestamp>`) and unpinned (`--unpin=`); a pinned build stays on the server and does not count towards the two builds kept by `DIST-16`, e.g. a release or a known-good build to go back to. The pin is a flag in the signed `manifest.json` (`XC-54`, `XC-83`, `XT-15`, `XD-10` in `../xoros-xor-tool/REQUIREMENTS.md`); devices that do not know it ignore it. | `OTA-3` | Only the two newest builds of a flavor are online. |
 | DIST-19 | Factory partition (`DEV-5`): every machine's `.wks` adds `part --part-name factory --label factory --fstype ext4 --fixed-size 16M` after `overlay`; a post-processing step of the image (`sgdisk --transpose=6:7`) swaps the GPT entries, so `application` keeps entry 6 and stays last on the disk. The normal system mounts `/factory` read-only (`nofail`, mode 0700). `scripts/flash.sh` preserves the factory identity: before writing an image to a drive that has a provisioned `factory` partition, it copies the partition to a private temporary file in RAM (`/dev/shm`, mode 0600), writes it back after the image, and erases the copy; `--wipe-factory` skips this. `xor` provides the provisioning command (`XT-16` in `../xoros-xor-tool/REQUIREMENTS.md`). | XorOS Link factory identity (`../xoros-link-device/docs/specs.md` Appendix A.1) | No place for a per-device key that survives resets, OTA and re-flashing. |
+| DIST-20 | Build identity in `/xoros.env` (4.4): `scripts/build.sh` passes the commit of the `xoros-distro` checkout (`-dirty` with uncommitted or untracked files; `docker/run.sh` determines it on the host, as the build container has no `.git`) and, when set, a build timestamp to the image recipe (`conf/auto.conf`), which writes `SOURCE_REVISION` and uses the timestamp as `TIMESTAMP` instead of the image's own build time. `build.sh -b=all` and the `Build Distro` workflow set the timestamp once per run (start of the run, UTC), so every board of the run carries the same `TIMESTAMP`; a single-board local build keeps the image's build time. Both values are task inputs of the image, so a new commit or a new run rebuilds it instead of taking an image with old values from sstate. | Matching builds across boards (same source, same run) | Builds of one run differ in `TIMESTAMP` and nothing records their source. |
 
 ## 13. Current state of the app (for orientation)
 
@@ -997,3 +1006,5 @@ The `models` module holds an older manifest shape; replace it with the one in 6.
    (`DIST-17`, `XD-9`).
 8. **M8 (P2, mostly distro):** pinned builds (`DIST-18`), on top of `xoros-core` C7 (`XC-54`, `XC-83`, `XT-15`,
    `XD-10`). App: the "pinned" mark in the build list (`OTA-3`).
+9. **M9 (P2, distro):** build identity (`DIST-20`): `SOURCE_REVISION` and a shared `TIMESTAMP` per build run. App:
+   the revision on the status screen (`SYS-1`, P3).
