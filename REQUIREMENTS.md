@@ -63,6 +63,7 @@ noted (hardware info, `HW-*`).
 | 3 | `rootfs_b` | squashfs | 1 GiB | `bb91087f-3fce-4b60-a48f-9635e9f43a94` | Slot B, same layout |
 | 4 | `rescue` | squashfs | 704 MiB | `c1e8de08-5724-494f-bb12-634765e37cfb` | Rescue system (this app) |
 | 5 | `overlay` | ext4, label `overlay` | 256 MiB | random | Upper layer of `/etc` of the normal system |
+| 7 | `factory` | ext4, label `factory` | 16 MiB | random | Factory identity of XorOS Link (`DEV-5`): written once at the factory, never by OTA, reset or restore. On the disk it lies between `overlay` and `application` (`DEV-5`) |
 | 6 | `application` | ext4, label `application` (FS UUID `e3921621-6463-4485-89ee-77e5c69fa7f3`) | 4 GiB (may be grown to fill the disk) | random | Mounted at `/opt` in the normal system |
 
 Consequences the app MUST handle:
@@ -78,6 +79,15 @@ Consequences the app MUST handle:
   to tell the boot disk from external sticks; only `DEV-2` decides.
 - **DEV-4 (P1)** Partition device names: `/dev/sdX<n>`, `/dev/mmcblk0p<n>`, `/dev/nvme0n1p<n>`. Build them from sysfs
   (`/sys/block/<disk>/<part>/partition`), never by string concatenation.
+- **DEV-5 (P2)** Factory partition (`DIST-19`, XorOS Link `../xoros-link-device/docs/specs.md` Appendix A.1): GPT
+  entry 7, PARTLABEL `factory`, placed on the disk between `overlay` (5) and `application` (6), so `application`
+  stays the last partition and can still grow into free space. Entry numbers are therefore not in disk order; the app
+  MUST address partitions by entry number with the PARTLABEL check (`DEV-1`), never by their position. Disks made
+  before `DIST-19` have no entry 7: the app MUST treat a missing `factory` partition as "not provisioned", not as an
+  error of the layout. Content after provisioning (`XT-16` in `../xoros-xor-tool/REQUIREMENTS.md`): `factory.json`
+  (device ID, model, public key, time of provisioning; public) and `factory-key.pem` (P-256 private key, mode 0600).
+  The rescue shell never writes, exports or deletes it: not by reset (`RST-*`), backup and restore (`BAK-*`), the
+  diagnostics bundle (`LOG-2`) or the subshell's documented tools; it MAY show `factory.json` (`SYS-2`).
 - Squashfs images are written raw at offset 0 of the partition. The rest of the partition is unused. The real image
   length is the squashfs superblock field `bytes_used` (little-endian u64 at byte offset 40) rounded up to 4096
   (mksquashfs pads to 4 KiB). Hashes in `xoros.env` and OTA manifests cover exactly the image file, so hash the first
@@ -184,6 +194,9 @@ To read a slot's `/xoros.env`, mount the slot read-only (`mount -t squashfs -o r
   `overlays/etc/upper`; deletions are overlayfs whiteouts (character devices 0:0) and opaque directories (xattr
   `trusted.overlay.opaque=y`).
 - `application` (ext4): mounted at `/opt` in the normal system (apps, Docker data, user data).
+- `factory` (ext4, `DEV-5`): mounted read-only at `/factory` (directory mode 0700, root only) in the normal system for
+  the XorOS Link device library; not mounted in the rescue system except read-only to show `factory.json`. Only
+  `xor factory provision` writes it, once.
 - The rescue shell MAY create its own top-level directory `rescue/` on the `overlay` partition for its settings
   (`CFG-1`). The normal system does not use anything outside `overlays/`.
 
@@ -303,7 +316,8 @@ Power             reboot, reboot into slot, power off (PWR-*)
   - persistent partitions: present, mountable, used/free space, last fsck result if known;
   - network summary (interfaces, IPs, Internet reachable yes/no);
   - date/time and whether it is synchronized.
-- **SYS-2 (P1)** Hardware details screen: board model (`/proc/device-tree/model` on arm64,
+- **SYS-2 (P1)** Hardware details screen (P2 addition: factory identity from `factory.json`, `DEV-5`: device ID,
+  model, provisioned at, or "not provisioned"): board model (`/proc/device-tree/model` on arm64,
   `/sys/class/dmi/id/{sys_vendor,product_name,board_name,bios_version}` on x86), CPU model and cores, RAM total/free,
   CPU temperature (`/sys/class/thermal/thermal_zone*/temp`), on the Pi the throttling state
   (`/sys/devices/platform/soc/soc:firmware/get_throttled` if present, decoded: under-voltage, throttled, ...), kernel
@@ -437,7 +451,8 @@ Requirements:
 
 ### 6.5 Backup and restore of persistent partitions (`BAK`)
 
-- **BAK-1 (P1)** Export to stick: user selects `overlay`, `application` or both (default both). The partitions are
+- **BAK-1 (P1)** Export to stick: user selects `overlay`, `application` or both (default both); the `factory`
+  partition is never exported or restored (`DEV-5`). The partitions are
   mounted read-only. Output is one archive:
 
   ```
@@ -497,7 +512,8 @@ Requirements:
 - **RST-1 (P1)** Reset configuration: delete the content of `overlay` (keeps the rescue's own `rescue/` directory
   unless the user also chooses "reset rescue settings"). Result: the normal system starts with the `/etc` shipped in
   the slot.
-- **RST-2 (P1)** Full reset: overlay as above plus delete all data on `application`.
+- **RST-2 (P1)** Full reset: overlay as above plus delete all data on `application`. Neither reset touches the
+  `factory` partition (`DEV-5`): the device keeps its factory identity and, with XorOS Link, its owner.
 - **RST-3 (P1)** Both require typed confirmation (`RESET`) and offer "export a backup first" (`BAK-1`) when a stick is
   present.
 
@@ -608,7 +624,8 @@ include it in the diagnostics bundle (`LOG-2`).
   with search.
 - **LOG-2 (P1)** Diagnostics bundle to stick: `xoros-diag-<hostname>-<YYYYMMDD-HHMMSS>.tar.gz` with system report
   (`SYS-5`), grubenv, both `xoros.env`, partition table, `dmesg`, `journalctl -b`, app log, test results, network
-  test results. Must not include Wi-Fi passphrases or backup content.
+  test results. Must not include Wi-Fi passphrases, backup content or `factory-key.pem` (`factory.json` MAY be
+  included).
 - **LOG-3 (P1)** The app writes its own log to `/run/xoros-rescue/rescue-shell.log` (and to the journal via stderr).
   Every destructive action is logged with parameters and result.
 - **SH-1 (P1)** Subshell: suspend the TUI, run `/bin/sh -l` as root on the same tty with prompt `rescue-shell# `,
@@ -952,6 +969,7 @@ described in the corresponding requirement.
 | DIST-16 | OTA artifacts are published to a Cloudflare R2 bucket served at `https://ota.xoros.io` (layout as in 6.3, unchanged for devices), replacing the Cloudflare Pages project, whose every deployment replaced the whole site with the board just built. Publishing merges the new build into the published `manifest.json` and keeps the two newest builds per `<VERSION>/<MACHINE>/<SUFFIX>`, plus pinned builds (`DIST-18`) (`XD-8` in `../xoros-xor-tool/REQUIREMENTS.md`). | `OTA-3` (downgrade to the previous build) | Only the newest build of one machine is online; no way back over the network. |
 | DIST-17 | Publishing also maintains a flavor index per machine, `<base>/index/<MACHINE>.json`, listing every published `<VERSION>/<SUFFIX>` of that machine with its builds and which of them are pinned (`XD-9`, `XC-110` in `../xoros-xor-tool/REQUIREMENTS.md`). | `DVM-2` | The developer menu lists the four suffixes of the installed version unchecked. |
 | DIST-18 | Pinned builds: a published build can be pinned (`publish-ota.sh --pin=<timestamp>`) and unpinned (`--unpin=`); a pinned build stays on the server and does not count towards the two builds kept by `DIST-16`, e.g. a release or a known-good build to go back to. The pin is a flag in the signed `manifest.json` (`XC-54`, `XC-83`, `XT-15`, `XD-10` in `../xoros-xor-tool/REQUIREMENTS.md`); devices that do not know it ignore it. | `OTA-3` | Only the two newest builds of a flavor are online. |
+| DIST-19 | Factory partition (`DEV-5`): every machine's `.wks` adds `part --part-name factory --label factory --fstype ext4 --fixed-size 16M` after `overlay`; a post-processing step of the image (`sgdisk --transpose=6:7`) swaps the GPT entries, so `application` keeps entry 6 and stays last on the disk. The normal system mounts `/factory` read-only (`nofail`, mode 0700). `scripts/flash.sh` preserves the factory identity: before writing an image to a drive that has a provisioned `factory` partition, it copies the partition to a private temporary file in RAM (`/dev/shm`, mode 0600), writes it back after the image, and erases the copy; `--wipe-factory` skips this. `xor` provides the provisioning command (`XT-16` in `../xoros-xor-tool/REQUIREMENTS.md`). | XorOS Link factory identity (`../xoros-link-device/docs/specs.md` Appendix A.1) | No place for a per-device key that survives resets, OTA and re-flashing. |
 
 ## 13. Current state of the app (for orientation)
 
